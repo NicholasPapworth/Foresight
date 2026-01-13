@@ -5,6 +5,7 @@ import pandas as pd
 
 from src.db import (
     get_settings, set_setting,
+    get_small_lot_tiers, save_small_lot_tiers,
     latest_supplier_snapshot, list_supplier_snapshots,
     load_supplier_prices, publish_supplier_snapshot
 )
@@ -46,20 +47,21 @@ def page_admin():
 
     st.subheader("Admin")
 
-    settings = get_settings()
-    c1, c2, c3 = st.columns(3)
-    with c1:
-        lot_charge = st.number_input("Small-lot charge (£/t)", min_value=0.0, value=float(settings["small_lot_charge_per_t"]))
-    with c2:
-        threshold = st.number_input("Small-lot threshold (t)", min_value=1.0, value=float(settings["small_lot_threshold_t"]))
-    with c3:
-        timeout = st.number_input("Basket timeout (minutes)", min_value=1, value=int(settings["basket_timeout_minutes"]))
+        settings = get_settings()
 
-    if st.button("Save settings", use_container_width=True):
-        set_setting("small_lot_charge_per_t", str(lot_charge))
-        set_setting("small_lot_threshold_t", str(threshold))
-        set_setting("basket_timeout_minutes", str(timeout))
-        st.success("Settings saved.")
+        c1, c2 = st.columns([2, 1])
+        with c1:
+            st.markdown("### Small-lot tiers (global)")
+            tiers = get_small_lot_tiers()
+    
+            edited = st.data_editor(
+                tiers[["min_t", "max_t", "charge_per_t", "active"]],
+                num_rows="dynamic",
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "min_t": st.column_config.NumberColumn("Min t", min_value=0.0, step=0.1),
+                    "max_t": st.column_config.NumberColumn("Max t", min
 
     st.divider()
     st.markdown("### Upload supplier prices (SUPPLIER_PRICES)")
