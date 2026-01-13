@@ -1,12 +1,30 @@
 from itertools import combinations
 import pandas as pd
 
+def tier_charge_per_t(tonnes: float, tiers: pd.DataFrame) -> float:
+    t = float(tonnes)
+    if t <= 0:
+        return 0.0
+
+    active = tiers[tiers["active"] == 1].copy()
+    active = active.sort_values("min_t")
+
+    for r in active.to_dict("records"):
+        mn = float(r["min_t"])
+        mx = r.get("max_t", None)
+        mx = None if mx is None or (isinstance(mx, float) and pd.isna(mx)) else float(mx)
+
+        if t >= mn and (mx is None or t <= mx):
+            return float(r["charge_per_t"])
+
+    return 0.0
+
 def optimise_basket(
     supplier_prices: pd.DataFrame,
     basket: list[dict],
-    small_lot_threshold_t: float,
-    small_lot_charge_per_t: float
+    tiers: pd.DataFrame
 ) -> dict:
+
     """
     supplier_prices columns: Supplier, Product, Location, Delivery Window, Price
     basket: [{Product, Location, Delivery Window, Qty}]
@@ -85,14 +103,22 @@ def optimise_basket(
             if not feasible:
                 continue
 
-            # Small-lot charges per supplier
+            # Tiered small-lot charges per supplier
             lot_charge_total = 0.0
             lot_charges = []
             for s, t in tonnes_by_supplier.items():
-                if 0 < t < small_lot_threshold_t:
-                    c = t * small_lot_charge_per_t
+                if t <= 0:
+                    continue
+                cpt = tier_charge_per_t(t, tiers)
+                if cpt > 0:
+                    c = t * cpt
                     lot_charge_total += c
-                    lot_charges.append({"Supplier": s, "Tonnes": t, "Lot Charge": c})
+                    lot_charges.append({
+                        "Supplier": s,
+                        "Tonnes": t,
+                        "Charge £/t": cpt,
+                        "Lot Charge": c
+                    })
 
             total = base_cost + lot_charge_total
 
