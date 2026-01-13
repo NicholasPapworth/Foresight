@@ -15,7 +15,7 @@ import streamlit as st
 # -----------------------------
 APP_TITLE = "Trading Price Sheet"
 DB_PATH = "prices.db"
-LOGO_PATH = "assets/logo.png"  # put your PNG here
+LOGO_PATH = "assets/logo.svg"
 REQUIRED_COLS = ["Product Category", "Product", "Location", "Price"]
 
 # -----------------------------
