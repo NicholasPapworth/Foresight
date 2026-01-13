@@ -6,10 +6,12 @@ import uuid
 
 DB_PATH = "foresight.db"
 
+
 def conn():
     c = sqlite3.connect(DB_PATH, check_same_thread=False)
     c.execute("PRAGMA journal_mode=WAL;")
     return c
+
 
 def init_db():
     c = conn()
@@ -50,7 +52,7 @@ def init_db():
     # Defaults
     _set_default(cur, "basket_timeout_minutes", "20")
 
-        # --- Tiered small-lot charges (global) ---
+    # --- Tiered small-lot charges (global) ---
     cur.execute("""
     CREATE TABLE IF NOT EXISTS small_lot_tiers (
         tier_id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -73,22 +75,25 @@ def init_db():
             (4.90, 9.90, 15.0),
             (10.0, 14.9, 8.0),
             (15.0, 24.0, 4.0),
-            (24.0, None, 0.0),   # >=24t no charge (explicit)
+            (24.0, None, 0.0),  # >=24t no charge
         ])
 
     c.commit()
     c.close()
+
 
 def _set_default(cur, key, value):
     cur.execute("SELECT 1 FROM app_settings WHERE key = ?", (key,))
     if not cur.fetchone():
         cur.execute("INSERT INTO app_settings (key, value) VALUES (?, ?)", (key, value))
 
+
 def get_settings() -> dict:
     c = conn()
     df = pd.read_sql_query("SELECT key, value FROM app_settings", c)
     c.close()
     return {r["key"]: r["value"] for _, r in df.iterrows()}
+
 
 def set_setting(key: str, value: str):
     c = conn()
@@ -100,6 +105,7 @@ def set_setting(key: str, value: str):
     c.commit()
     c.close()
 
+
 def list_supplier_snapshots(limit=200) -> pd.DataFrame:
     c = conn()
     df = pd.read_sql_query(f"""
@@ -110,6 +116,7 @@ def list_supplier_snapshots(limit=200) -> pd.DataFrame:
     """, c)
     c.close()
     return df
+
 
 def latest_supplier_snapshot():
     c = conn()
@@ -123,6 +130,7 @@ def latest_supplier_snapshot():
     row = cur.fetchone()
     c.close()
     return row
+
 
 def load_supplier_prices(snapshot_id: str) -> pd.DataFrame:
     c = conn()
@@ -141,6 +149,7 @@ def load_supplier_prices(snapshot_id: str) -> pd.DataFrame:
     """, c, params=(snapshot_id,))
     c.close()
     return df
+
 
 def publish_supplier_snapshot(df: pd.DataFrame, published_by: str, source_bytes: bytes) -> str:
     snapshot_id = str(uuid.uuid4())
@@ -179,6 +188,7 @@ def publish_supplier_snapshot(df: pd.DataFrame, published_by: str, source_bytes:
     c.close()
     return snapshot_id
 
+
 def get_small_lot_tiers() -> pd.DataFrame:
     c = conn()
     df = pd.read_sql_query("""
@@ -193,24 +203,64 @@ def get_small_lot_tiers() -> pd.DataFrame:
 def save_small_lot_tiers(df: pd.DataFrame):
     """
     Expects columns: min_t, max_t, charge_per_t, active
-    tier_id is ignored (we reinsert cleanly).
+    Replaces all tiers in DB.
     """
     work = df.copy()
 
+    # Require these columns
     for col in ["min_t", "charge_per_t"]:
-        work[col] = pd.to_numeric(work[col], errors="raise")
+        if col not in work.columns:
+            raise ValueError(f"Missing column '{col}' in tiers editor.")
 
-    work["max_t"] = work["max_t"].apply(
-        lambda x: None if x == "" or pd.isna(x) else float(x)
-    )
+    work["min_t"] = pd.to_numeric(work["min_t"], errors="raise")
+    work["charge_per_t"] = pd.to_numeric(work["charge_per_t"], errors="raise")
+
+    if "max_t" not in work.columns:
+        work["max_t"] = None
+    work["max_t"] = work["max_t"].apply(lambda x: None if x == "" or pd.isna(x) else float(x))
 
     if "active" not in work.columns:
         work["active"] = 1
-    work["active"] = work["active"].astype(int)
+    work["active"] = work["active"].apply(lambda x: 1 if str(x).strip() in ("1", "True", "true") else 0)
 
     tiers = work.sort_values("min_t").reset_index(drop=True)
 
-    for i in
+    # Validate min < max where max exists
+    for i in range(len(tiers)):
+        mn = float(tiers.loc[i, "min_t"])
+        mx = tiers.loc[i, "max_t"]
+        if mx is not None and mn >= float(mx):
+            raise ValueError(f"Invalid tier: min_t {mn} must be < max_t {mx}")
 
+    # Validate no overlaps among active tiers
+    active = tiers[tiers["active"] == 1].copy().sort_values("min_t").reset_index(drop=True)
+
+    def _end(row):
+        return float(row["max_t"]) if row["max_t"] is not None else float("inf")
+
+    for i in range(len(active) - 1):
+        if _end(active.loc[i]) >= float(active.loc[i + 1, "min_t"]):
+            raise ValueError("Overlapping active tiers detected. Adjust min/max so tiers do not overlap.")
+
+    c = conn()
+    cur = c.cursor()
+    cur.execute("DELETE FROM small_lot_tiers;")
+
+    rows = []
+    for r in tiers.to_dict("records"):
+        rows.append((
+            float(r["min_t"]),
+            r["max_t"],
+            float(r["charge_per_t"]),
+            int(r["active"]),
+        ))
+
+    cur.executemany("""
+        INSERT INTO small_lot_tiers (min_t, max_t, charge_per_t, active)
+        VALUES (?, ?, ?, ?)
+    """, rows)
+
+    c.commit()
+    c.close()
 
 
