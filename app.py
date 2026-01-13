@@ -13,7 +13,7 @@ import streamlit as st
 # -----------------------------
 # Config
 # -----------------------------
-APP_TITLE = "Trading Price Sheet"
+APP_TITLE = "Foresight - ADM Live Prices"
 DB_PATH = "prices.db"
 LOGO_PATH = "assets/logo.svg"
 REQUIRED_COLS = ["Product Category", "Product", "Location", "Price"]
