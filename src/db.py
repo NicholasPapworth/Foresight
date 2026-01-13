@@ -133,16 +133,16 @@ def publish_supplier_snapshot(df: pd.DataFrame, published_by: str, source_bytes:
     """, (snapshot_id, published_at, published_by, source_hash, row_count))
 
     rows = []
-    for r in df.itertuples(index=False):
+    for r in df.to_dict("records"):
         rows.append((
             snapshot_id,
-            str(r.Supplier).strip(),
-            str(getattr(r, "Product Category", "")).strip() if "Product Category" in df.columns else "",
-            str(r.Product).strip(),
-            str(r.Location).strip(),
-            str(r._asdict().get("Delivery Window", "")).strip(),
-            float(r.Price),
-            str(r.Unit).strip(),
+            str(r["Supplier"]).strip(),
+            str(r.get("Product Category", "")).strip(),
+            str(r["Product"]).strip(),
+            str(r["Location"]).strip(),
+            str(r["Delivery Window"]).strip(),
+            float(r["Price"]),
+            str(r["Unit"]).strip(),
         ))
 
     cur.executemany("""
@@ -154,3 +154,4 @@ def publish_supplier_snapshot(df: pd.DataFrame, published_by: str, source_bytes:
     c.commit()
     c.close()
     return snapshot_id
+
