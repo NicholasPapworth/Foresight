@@ -48,9 +48,33 @@ def init_db():
     """)
 
     # Defaults
-    _set_default(cur, "small_lot_threshold_t", "24")
-    _set_default(cur, "small_lot_charge_per_t", "15")
     _set_default(cur, "basket_timeout_minutes", "20")
+
+        # --- Tiered small-lot charges (global) ---
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS small_lot_tiers (
+        tier_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        min_t REAL NOT NULL,
+        max_t REAL,
+        charge_per_t REAL NOT NULL,
+        active INTEGER NOT NULL DEFAULT 1
+    );
+    """)
+
+    # Seed defaults if empty
+    cur.execute("SELECT COUNT(*) FROM small_lot_tiers;")
+    if cur.fetchone()[0] == 0:
+        cur.executemany("""
+            INSERT INTO small_lot_tiers (min_t, max_t, charge_per_t, active)
+            VALUES (?, ?, ?, 1)
+        """, [
+            (0.60, 2.39, 130.0),
+            (2.40, 4.80, 70.0),
+            (4.90, 9.90, 15.0),
+            (10.0, 14.9, 8.0),
+            (15.0, 24.0, 4.0),
+            (24.0, None, 0.0),   # >=24t no charge (explicit)
+        ])
 
     c.commit()
     c.close()
@@ -154,4 +178,39 @@ def publish_supplier_snapshot(df: pd.DataFrame, published_by: str, source_bytes:
     c.commit()
     c.close()
     return snapshot_id
+
+def get_small_lot_tiers() -> pd.DataFrame:
+    c = conn()
+    df = pd.read_sql_query("""
+        SELECT tier_id, min_t, max_t, charge_per_t, active
+        FROM small_lot_tiers
+        ORDER BY min_t ASC
+    """, c)
+    c.close()
+    return df
+
+
+def save_small_lot_tiers(df: pd.DataFrame):
+    """
+    Expects columns: min_t, max_t, charge_per_t, active
+    tier_id is ignored (we reinsert cleanly).
+    """
+    work = df.copy()
+
+    for col in ["min_t", "charge_per_t"]:
+        work[col] = pd.to_numeric(work[col], errors="raise")
+
+    work["max_t"] = work["max_t"].apply(
+        lambda x: None if x == "" or pd.isna(x) else float(x)
+    )
+
+    if "active" not in work.columns:
+        work["active"] = 1
+    work["active"] = work["active"].astype(int)
+
+    tiers = work.sort_values("min_t").reset_index(drop=True)
+
+    for i in
+
+
 
