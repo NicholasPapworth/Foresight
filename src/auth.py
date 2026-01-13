@@ -12,7 +12,14 @@ def require_login() -> bool:
     username = st.text_input("Username")
     password = st.text_input("Password", type="password")
 
-    users = st.secrets.get("users", {})
+    try:
+        users = st.secrets.get("users", {})
+    except Exception:
+        users = {}
+
+    if not users:
+        st.warning("No users configured in Streamlit secrets. Add users in Streamlit Cloud → App → Settings → Secrets.")
+        return False
 
     if st.button("Sign in", use_container_width=True):
         u = users.get(username)
