@@ -1,4 +1,3 @@
-import io
 import time
 import streamlit as st
 import pandas as pd
@@ -13,6 +12,7 @@ from src.validation import load_supplier_sheet
 from src.optimizer import optimise_basket
 
 LOGO_PATH = "assets/logo.svg"
+
 
 def render_header():
     left, mid, right = st.columns([2, 5, 3], vertical_alignment="center")
@@ -32,6 +32,7 @@ def render_header():
             st.caption("No supplier snapshot published yet.")
     st.divider()
 
+
 def _get_latest_prices_df():
     snap = latest_supplier_snapshot()
     if not snap:
@@ -40,6 +41,7 @@ def _get_latest_prices_df():
     df = load_supplier_prices(sid)
     return sid, df
 
+
 def page_admin():
     if st.session_state.role != "admin":
         st.warning("Admin access required.")
@@ -47,23 +49,51 @@ def page_admin():
 
     st.subheader("Admin")
 
-        settings = get_settings()
+    # --- Settings (basket timeout) ---
+    settings = get_settings()
+    timeout = st.number_input(
+        "Basket timeout (minutes)",
+        min_value=1,
+        value=int(settings.get("basket_timeout_minutes", "20"))
+    )
 
-        c1, c2 = st.columns([2, 1])
-        with c1:
-            st.markdown("### Small-lot tiers (global)")
-            tiers = get_small_lot_tiers()
-    
-            edited = st.data_editor(
-                tiers[["min_t", "max_t", "charge_per_t", "active"]],
-                num_rows="dynamic",
-                use_container_width=True,
-                hide_index=True,
-                column_config={
-                    "min_t": st.column_config.NumberColumn("Min t", min_value=0.0, step=0.1),
-                    "max_t": st.column_config.NumberColumn("Max t", min
+    if st.button("Save settings", use_container_width=True):
+        set_setting("basket_timeout_minutes", str(timeout))
+        st.success("Settings saved.")
 
     st.divider()
+
+    # --- Tier editor ---
+    st.markdown("### Small-lot tiers (global)")
+    tiers = get_small_lot_tiers()
+
+    edited = st.data_editor(
+        tiers[["min_t", "max_t", "charge_per_t", "active"]],
+        num_rows="dynamic",
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "min_t": st.column_config.NumberColumn("Min t", min_value=0.0, step=0.1),
+            "max_t": st.column_config.NumberColumn("Max t", min_value=0.0, step=0.1),
+            "charge_per_t": st.column_config.NumberColumn("Charge (£/t)", min_value=0.0, step=0.1),
+            "active": st.column_config.CheckboxColumn("Active"),
+        }
+    )
+
+    if st.button("Save tiers", type="primary", use_container_width=True):
+        try:
+            # Convert checkbox True/False to 1/0
+            edited2 = edited.copy()
+            edited2["active"] = edited2["active"].apply(lambda x: 1 if bool(x) else 0)
+            save_small_lot_tiers(edited2)
+            st.success("Tiers saved.")
+            st.rerun()
+        except Exception as e:
+            st.error(str(e))
+
+    st.divider()
+
+    # --- Upload supplier prices ---
     st.markdown("### Upload supplier prices (SUPPLIER_PRICES)")
     up = st.file_uploader("Upload Excel", type=["xlsx"])
 
@@ -80,6 +110,7 @@ def page_admin():
                 st.rerun()
         except Exception as e:
             st.error(str(e))
+
 
 def page_history():
     st.subheader("History")
@@ -100,6 +131,7 @@ def page_history():
 
     st.dataframe(df, use_container_width=True, hide_index=True)
 
+
 def page_trader():
     st.subheader("Trader")
 
@@ -109,9 +141,9 @@ def page_trader():
         return
 
     settings = get_settings()
-    lot_charge = float(settings["small_lot_charge_per_t"])
-    threshold = float(settings["small_lot_threshold_t"])
-    timeout_min = int(settings["basket_timeout_minutes"])
+    timeout_min = int(settings.get("basket_timeout_minutes", "20"))
+
+    tiers = get_small_lot_tiers()
 
     # Basket state
     if "basket" not in st.session_state:
@@ -125,7 +157,7 @@ def page_trader():
         st.session_state.basket_created_at = time.time()
         st.info("Basket expired and has been cleared.")
 
-    st.caption(f"Using supplier snapshot: {sid[:8]} | Basket timeout: {timeout_min} min | Small-lot: < {threshold}t charged at £{lot_charge}/t")
+    st.caption(f"Using supplier snapshot: {sid[:8]} | Basket timeout: {timeout_min} min")
 
     # Controls
     c1, c2, c3, c4 = st.columns([3, 2, 2, 2])
@@ -160,10 +192,9 @@ def page_trader():
 
         if st.button("Optimise", type="primary", use_container_width=True):
             res = optimise_basket(
-                supplier_prices=df[["Supplier","Product","Location","Delivery Window","Price"]],
+                supplier_prices=df[["Supplier", "Product", "Location", "Delivery Window", "Price"]],
                 basket=st.session_state.basket,
-                small_lot_threshold_t=threshold,
-                small_lot_charge_per_t=lot_charge
+                tiers=tiers
             )
             if not res["ok"]:
                 st.error(res["error"])
@@ -184,3 +215,4 @@ def page_trader():
             })
     else:
         st.info("Basket is empty.")
+
