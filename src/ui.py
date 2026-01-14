@@ -317,7 +317,7 @@ def page_admin_pricing():
     st.divider()
 
     # Tiers
-    st.markdown("### Small-lot tiers (global)")
+    st.markdown("### Small-lot tiers")
     tiers = get_small_lot_tiers()
     if tiers is None or tiers.empty:
         tiers = pd.DataFrame(columns=["min_t", "max_t", "charge_per_t", "active"])
@@ -355,7 +355,7 @@ def page_admin_pricing():
     st.divider()
 
     # Margins
-    st.markdown("### Admin margins (hidden from traders)")
+    st.markdown("### Admin margins")
     mdf = list_margins(active_only=True)
     if mdf.empty:
         st.info("No active margins set.")
@@ -409,7 +409,7 @@ def page_admin_orders():
         st.warning("Admin access required.")
         return
 
-    st.subheader("Admin — Order blotter")
+    st.subheader("Admin | Orders")
 
     status = st.selectbox("Status filter", ["ALL","PENDING","COUNTERED","CONFIRMED","FILLED","REJECTED","CANCELLED"])
     if status == "ALL":
