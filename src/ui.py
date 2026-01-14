@@ -372,7 +372,7 @@ def page_trader_orders():
     if header["status"] in ("PENDING", "COUNTERED"):
         if st.button("Cancel order", use_container_width=True):
             try:
-                trader_cancel_order(order_id, st.session_state.user)
+                trader_cancel_order(order_id, st.session_state.user, expected_version=header["version"])
                 st.success("Order cancelled.")
                 st.rerun()
             except Exception as e:
@@ -383,7 +383,7 @@ def page_trader_orders():
         with c1:
             if st.button("Accept counter", type="primary", use_container_width=True):
                 try:
-                    trader_accept_counter(order_id, st.session_state.user)
+                    trader_accept_counter(order_id, st.session_state.user, expected_version=header["version"])
                     st.success("Counter accepted. Order is now CONFIRMED.")
                     st.rerun()
                 except Exception as e:
@@ -570,7 +570,7 @@ def page_admin_orders():
         with c1:
             if st.button("Confirm as-is", type="primary", use_container_width=True):
                 try:
-                    admin_confirm_order(order_id, st.session_state.user)
+                    admin_confirm_order(order_id, st.session_state.user, expected_version=header["version"])
                     st.success("Order CONFIRMED.")
                     st.rerun()
                 except Exception as e:
@@ -579,7 +579,14 @@ def page_admin_orders():
         with c2:
             if st.button("Send counter", use_container_width=True):
                 try:
-                    admin_counter_order(order_id, st.session_state.user, edited_lines=edited, admin_note=admin_note)
+                    admin_counter_order(
+                        order_id,
+                        st.session_state.user,
+                        edited_lines=edited,
+                        admin_note=admin_note,
+                        expected_version=header["version"]
+                    )
+                    
                     st.success("Counter sent. Status = COUNTERED.")
                     st.rerun()
                 except Exception as e:
@@ -588,7 +595,7 @@ def page_admin_orders():
         with c3:
             if st.button("Reject", use_container_width=True):
                 try:
-                    admin_reject_order(order_id, st.session_state.user, admin_note=admin_note)
+                    admin_reject_order(order_id, st.session_state.user, admin_note=admin_note, expected_version=header["version"])
                     st.success("Order REJECTED.")
                     st.rerun()
                 except Exception as e:
@@ -598,7 +605,7 @@ def page_admin_orders():
         st.markdown("### Fill")
         if st.button("Mark FILLED", type="primary", use_container_width=True):
             try:
-                admin_mark_filled(order_id, st.session_state.user)
+                admin_mark_filled(order_id, st.session_state.user, expected_version=header["version"])
                 st.success("Order marked FILLED.")
                 st.rerun()
             except Exception as e:
