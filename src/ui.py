@@ -48,6 +48,11 @@ def _get_latest_prices_df():
     df = load_supplier_prices(sid)
     return sid, df
 
+def _ensure_basket():
+    if "basket" not in st.session_state:
+        st.session_state.basket = []
+        st.session_state.basket_created_at = time.time()
+
 
 def _best_prices_board(df: pd.DataFrame) -> pd.DataFrame:
     """
@@ -85,19 +90,45 @@ def _best_prices_board(df: pd.DataFrame) -> pd.DataFrame:
     return best
 
 
-def page_trader_best_prices():
-    st.subheader("Trader | Best Prices")
+    _ensure_basket()
 
-    sid, df = _get_latest_prices_df()
-    if df is None:
-        st.warning("No supplier snapshot available. Admin must publish one.")
-        return
+    st.markdown("### Add to basket from board")
 
-    # Apply margins (so traders see best SELL prices)
-    margins = get_effective_margins()
-    df = apply_margins(df, margins)
+    qty = st.number_input("Qty (t) for selected lines", min_value=0.0, value=10.0, step=1.0)
 
-    board = _best_prices_board(df)
+    editable = view.copy()
+    editable.insert(0, "Add", False)  # checkbox column
+    editable = editable.rename(columns={
+        "Product Category": "Category",
+        "Delivery Window": "Window",
+    })
+
+    edited = st.data_editor(
+        editable[["Add", "Category", "Product", "Location", "Window", "Best Price", "Unit", "Supplier"]],
+        use_container_width=True,
+        hide_index=True,
+        disabled=["Category", "Product", "Location", "Window", "Best Price", "Unit", "Supplier"],
+        column_config={
+            "Add": st.column_config.CheckboxColumn("Add"),
+            "Best Price": st.column_config.NumberColumn("Best Price", format="£%.2f"),
+        },
+        key="best_prices_board_editor"
+    )
+
+    if st.button("Add selected lines to basket", type="primary", use_container_width=True):
+        selected = edited[edited["Add"] == True].copy()
+        if selected.empty:
+            st.warning("Tick at least one line.")
+        else:
+            for _, r in selected.iterrows():
+                st.session_state.basket.append({
+                    "Product": r["Product"],
+                    "Location": r["Location"],
+                    "Delivery Window": r["Window"],
+                    "Qty": float(qty),
+                })
+            st.success(f"Added {len(selected)} line(s) to basket.")
+            # Optional: jump traders to Pricing page manually (depends on your nav)
 
     # --- Filters ---
     st.markdown("### Filters")
