@@ -781,3 +781,126 @@ def render_presence_panel(current_page_name: str, *, refresh_ms: int = 10_000):
         },
     )
 
+def page_admin_blotter():
+    # --- Guard ---
+    if st.session_state.get("role") != "admin":
+        st.warning("Admin access required.")
+        return
+
+    st.subheader("Admin | Blotter")
+
+    rep = admin_margin_report()
+    if rep is None or rep.empty:
+        st.info("No filled orders yet (or report is empty).")
+        return
+
+    df = rep.copy()
+
+    # ---- Type fixes ----
+    if "created_at_utc" in df.columns:
+        df["created_at_utc"] = pd.to_datetime(df["created_at_utc"], errors="coerce", utc=True)
+
+    for c in ["Qty", "Base Price", "Sell Price"]:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce")
+
+    # ---- Derived metrics ----
+    df["sell_value"] = df["Sell Price"] * df["Qty"]
+    df["base_value"] = df["Base Price"] * df["Qty"]
+    df["gross_margin"] = df["sell_value"] - df["base_value"]
+    df["gm_pct"] = df["gross_margin"] / df["sell_value"]
+    df["gm_pct"] = df["gm_pct"].where(df["sell_value"] != 0, 0.0)
+
+    # ---- Filters (top row) ----
+    st.markdown("### Filters")
+    f1, f2, f3, f4 = st.columns([2, 2, 2, 2])
+
+    # Column names (adjust here if yours differ)
+    trader_col = "created_by" if "created_by" in df.columns else None
+    cat_col = "Product Category" if "Product Category" in df.columns else ("Category" if "Category" in df.columns else None)
+
+    with f1:
+        traders = ["ALL"] + (sorted(df[trader_col].dropna().unique().tolist()) if trader_col else [])
+        trader = st.selectbox("Trader", traders) if trader_col else "ALL"
+
+    with f2:
+        cats = ["ALL"] + (sorted(df[cat_col].dropna().unique().tolist()) if cat_col else [])
+        cat = st.selectbox("Product group", cats) if cat_col else "ALL"
+
+    with f3:
+        products = ["ALL"] + (sorted(df["Product"].dropna().unique().tolist()) if "Product" in df.columns else [])
+        prod = st.selectbox("Product", products) if "Product" in df.columns else "ALL"
+
+    with f4:
+        locs = ["ALL"] + (sorted(df["Location"].dropna().unique().tolist()) if "Location" in df.columns else [])
+        loc = st.selectbox("Location", locs) if "Location" in df.columns else "ALL"
+
+    view = df.copy()
+    if trader_col and trader != "ALL":
+        view = view[view[trader_col] == trader]
+    if cat_col and cat != "ALL":
+        view = view[view[cat_col] == cat]
+    if "Product" in view.columns and prod != "ALL":
+        view = view[view["Product"] == prod]
+    if "Location" in view.columns and loc != "ALL":
+        view = view[view["Location"] == loc]
+
+    st.divider()
+
+    # ---- KPI strip ----
+    sell_value = float(view["sell_value"].sum())
+    base_value = float(view["base_value"].sum())
+    gm = float(view["gross_margin"].sum())
+    tonnes = float(view["Qty"].sum())
+    gm_pct = (gm / sell_value * 100.0) if sell_value else 0.0
+
+    k1, k2, k3, k4, k5 = st.columns(5)
+    k1.metric("Sell value", f"£{sell_value:,.0f}")
+    k2.metric("Base value", f"£{base_value:,.0f}")
+    k3.metric("Gross margin", f"£{gm:,.0f}")
+    k4.metric("GM %", f"{gm_pct:.2f}%")
+    k5.metric("Tonnes", f"{tonnes:,.1f} t")
+
+    # ---- Grouping ----
+    st.markdown("### Grouped summary")
+    group_options = []
+    for c in ["created_by", cat_col, "Product", "Location", "Delivery Window", "Supplier"]:
+        if c and c in view.columns:
+            group_options.append(c)
+
+    group_by = st.multiselect("Group by", options=group_options, default=[c for c in ["created_by", "Location"] if c in group_options])
+
+    if not group_by:
+        st.info("Select at least one field in 'Group by'.")
+        return
+
+    agg = (
+        view.groupby(group_by, dropna=False)
+        .agg(
+            Qty=("Qty", "sum"),
+            sell_value=("sell_value", "sum"),
+            base_value=("base_value", "sum"),
+            gross_margin=("gross_margin", "sum"),
+        )
+        .reset_index()
+    )
+    agg["gm_pct"] = agg["gross_margin"] / agg["sell_value"]
+    agg["gm_pct"] = agg["gm_pct"].where(agg["sell_value"] != 0, 0.0)
+
+    agg = agg.sort_values("gross_margin", ascending=False)
+
+    st.dataframe(
+        agg,
+        use_container_width=True,
+        hide_index=True,
+        column_config={
+            "sell_value": st.column_config.NumberColumn("Sell value", format="£%.0f"),
+            "base_value": st.column_config.NumberColumn("Base value", format="£%.0f"),
+            "gross_margin": st.column_config.NumberColumn("Gross margin", format="£%.0f"),
+            "gm_pct": st.column_config.NumberColumn("GM %", format="%.2f"),
+        },
+    )
+
+    st.markdown("### Detail")
+    st.dataframe(view, use_container_width=True, hide_index=True)
+
