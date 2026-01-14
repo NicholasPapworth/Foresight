@@ -51,34 +51,38 @@ def _get_latest_prices_df():
 
 def _best_prices_board(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Returns best (lowest) SELL price per Product Category/Product/Location/Delivery Window.
+    Returns best (lowest) SELL price per:
+      Product Category + Product + Location + Delivery Window
+
+    We ignore supplier in the grouping (we pick the cheapest supplier row per group).
     Expects df to already include Sell Price (from apply_margins).
     """
     work = df.copy()
 
-    # Ensure required fields exist
-    for col in ["Product Category", "Product", "Location", "Delivery Window", "Supplier", "Sell Price", "Unit"]:
+    required = ["Product Category", "Product", "Location", "Delivery Window", "Supplier", "Sell Price", "Unit"]
+    for col in required:
         if col not in work.columns:
             raise ValueError(f"Missing column '{col}' needed for best price board.")
 
-    # Normalise blanks
+    # Normalise + numeric
     work["Product Category"] = work["Product Category"].fillna("").astype(str)
+    work["Product"] = work["Product"].fillna("").astype(str)
     work["Location"] = work["Location"].fillna("").astype(str)
-
-    # Ensure numeric (critical for idxmin correctness)
+    work["Delivery Window"] = work["Delivery Window"].fillna("").astype(str)
+    work["Supplier"] = work["Supplier"].fillna("").astype(str)
+    work["Unit"] = work["Unit"].fillna("").astype(str)
     work["Sell Price"] = pd.to_numeric(work["Sell Price"], errors="raise")
 
     group_cols = ["Product Category", "Product", "Location", "Delivery Window"]
 
-    # Find the row index of the minimum Sell Price per group
+    # Pick the cheapest supplier row per group
     idx = work.groupby(group_cols)["Sell Price"].idxmin()
-    best = work.loc[idx, group_cols + ["Supplier", "Sell Price", "Unit"]].copy()
+    best = work.loc[idx, group_cols + ["Sell Price", "Unit", "Supplier"]].copy()
 
-    best = best.rename(columns={
-        "Sell Price": "Best Price",
-    }).sort_values(["Product Category", "Product", "Location", "Delivery Window"])
+    best = best.rename(columns={"Sell Price": "Best Price"})
+    best = best.sort_values(["Product Category", "Product", "Location", "Delivery Window"]).reset_index(drop=True)
 
-    return best.reset_index(drop=True)
+    return best
 
 
 def page_trader_best_prices():
@@ -136,6 +140,11 @@ def page_trader_best_prices():
         "Delivery Window": "Window",
     })
 
+    show = view.rename(columns={
+        "Product Category": "Category",
+        "Delivery Window": "Window",
+    })
+    
     st.dataframe(
         show[["Category", "Product", "Location", "Window", "Best Price", "Unit", "Supplier"]],
         use_container_width=True,
