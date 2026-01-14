@@ -20,7 +20,6 @@ if not require_login():
 
 render_header()
 
-# Navigation
 pages = {
     "Trader | Pricing": page_trader_pricing,
     "Trader | Best Prices": page_trader_best_prices,
@@ -28,7 +27,6 @@ pages = {
     "History": page_history,
 }
 
-# Admin pages
 if st.session_state.get("role") == "admin":
     pages.update({
         "Admin | Pricing": page_admin_pricing,
@@ -40,9 +38,9 @@ with st.sidebar:
     choice = st.radio("", list(pages.keys()), key="nav_choice")
 
     st.divider()
-    render_presence_panel(choice)   # <-- sidebar presence panel
+    render_presence_panel(current_page_name=choice)  # explicit kwarg is clearer
 
-pages[choice]()  # <-- route
+pages[choice]()
 
 
 
