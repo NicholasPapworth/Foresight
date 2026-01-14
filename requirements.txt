@@ -1,3 +1,4 @@
 streamlit
 pandas
 openpyxl
+bcrypt==4.2.0
