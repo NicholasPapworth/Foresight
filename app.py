@@ -9,6 +9,7 @@ from src.ui import (
     page_trader_orders,
     page_admin_pricing,
     page_admin_orders,
+    page_admin_blotter,
     page_history,
 )
 
@@ -31,6 +32,7 @@ if st.session_state.get("role") == "admin":
     pages.update({
         "Admin | Pricing": page_admin_pricing,
         "Admin | Orders": page_admin_orders,
+        "Admin | Blotter": page_admin_blotter,
     })
 
 with st.sidebar:
