@@ -82,7 +82,7 @@ def _best_prices_board(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def page_trader_best_prices():
-    st.subheader("Trader — Best Prices")
+    st.subheader("Trader | Best Prices")
 
     sid, df = _get_latest_prices_df()
     if df is None:
