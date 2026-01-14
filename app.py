@@ -39,20 +39,6 @@ with st.sidebar:
 
 pages[choice]()
 
-# --- Route ---
-routes = {
-    "Pricing": page_trader_pricing,
-    "Best Prices": page_trader_best_prices,
-    "Orders": page_trader_orders,
-    "History": page_history,
-    "Admin Pricing": page_admin_pricing,
-    "Admin Orders": page_admin_orders,
-}
-
-# If admin radio exists and is selected, use it; otherwise use trader selection
-choice = admin_choice if (admin_choice is not None) else trader_choice
-routes[choice]()
-
 
 
 
