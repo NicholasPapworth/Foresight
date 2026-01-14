@@ -27,19 +27,24 @@ pages_admin = {
     "Admin Orders": page_admin_orders,
 }
 
+# --- Sidebar: navigation ONLY ---
 with st.sidebar:
     st.markdown(f"**User:** {st.session_state.user}")
     st.markdown(f"**Role:** {st.session_state.role}")
     st.divider()
 
     if st.session_state.role == "admin":
-        choice = st.radio("Navigation", list(pages_trader.keys()) + list(pages_admin.keys()))
-        if choice in pages_trader:
-            pages_trader[choice]()
-        else:
-            pages_admin[choice]()
+        nav_items = list(pages_trader.keys()) + list(pages_admin.keys())
     else:
-        choice = st.radio("Navigation", list(pages_trader.keys()))
-        pages_trader[choice]()
+        nav_items = list(pages_trader.keys())
+
+    choice = st.radio("Navigation", nav_items)
+
+# --- Main area: render the selected page OUTSIDE the sidebar ---
+if choice in pages_trader:
+    pages_trader[choice]()
+else:
+    pages_admin[choice]()
+
 
 
