@@ -409,6 +409,134 @@ def get_effective_margins() -> pd.DataFrame:
 
 ORDER_STATUSES = {"PENDING", "COUNTERED", "CONFIRMED", "FILLED", "REJECTED", "CANCELLED"}
 
+# Allowed transitions (state machine)
+ALLOWED_TRANSITIONS = {
+    # current_status: {action_type: new_status}
+    "PENDING": {
+        "CANCEL": "CANCELLED",
+        "COUNTER": "COUNTERED",
+        "CONFIRM": "CONFIRMED",
+        "REJECT": "REJECTED",
+    },
+    "COUNTERED": {
+        "CANCEL": "CANCELLED",
+        "ACCEPT_COUNTER": "CONFIRMED",
+        "COUNTER": "COUNTERED",   # allow re-counter
+        "CONFIRM": "CONFIRMED",
+        "REJECT": "REJECTED",
+    },
+    "CONFIRMED": {
+        "FILL": "FILLED",
+        "REJECT": "REJECTED",     # optional, you currently allow reject from confirmed
+    },
+    "FILLED": {},
+    "REJECTED": {},
+    "CANCELLED": {},
+}
+
+
+def _transition_order(
+    order_id: str,
+    action_type: str,
+    action_by: str,
+    *,
+    expected_version: int | None = None,
+    admin_note: str | None = None,
+    payload: dict | None = None,
+    edited_lines: pd.DataFrame | None = None,
+):
+    """
+    Central gatekeeper:
+    - Enforces state machine transitions
+    - Applies optimistic locking via orders.version
+    - Updates orders.status + last_action fields + optional admin_note
+    - Writes order_actions audit record
+    - Increments orders.version on every successful transition
+    - Optionally updates order_lines sell_price for COUNTER
+    """
+    if action_type not in ("SUBMIT", "CANCEL", "COUNTER", "ACCEPT_COUNTER", "CONFIRM", "REJECT", "FILL"):
+        raise ValueError(f"Unknown action_type: {action_type}")
+
+    c = conn()
+    cur = c.cursor()
+
+    # Load current status and version
+    cur.execute("SELECT status, version, created_by FROM orders WHERE order_id = ?", (order_id,))
+    row = cur.fetchone()
+    if not row:
+        c.close()
+        raise ValueError("Order not found.")
+
+    cur_status = row[0]
+    cur_version = int(row[1] or 0)
+
+    # Optimistic locking check
+    if expected_version is not None and int(expected_version) != cur_version:
+        c.close()
+        raise ValueError("Order changed since you opened it. Refresh and try again.")
+
+    # Validate transition (SUBMIT is handled during create)
+    if action_type != "SUBMIT":
+        allowed = ALLOWED_TRANSITIONS.get(cur_status, {})
+        if action_type not in allowed:
+            c.close()
+            raise ValueError(f"Invalid transition: {cur_status} -> ? via {action_type}")
+        new_status = allowed[action_type]
+    else:
+        new_status = cur_status  # not used
+
+    # If COUNTER and edited_lines provided: update sell_price per line_no
+    if action_type == "COUNTER" and edited_lines is not None:
+        work = edited_lines.copy()
+        if "line_no" not in work.columns:
+            c.close()
+            raise ValueError("edited_lines must include line_no.")
+        if "Sell Price" not in work.columns:
+            c.close()
+            raise ValueError("edited_lines must include 'Sell Price'.")
+
+        work["Sell Price"] = pd.to_numeric(work["Sell Price"], errors="raise")
+
+        # Update each line sell_price (MVP behaviour you already had)
+        for _, r in work.iterrows():
+            ln = int(r["line_no"])
+            sp = float(r["Sell Price"])
+            cur.execute("""
+                UPDATE order_lines
+                SET sell_price = ?
+                WHERE order_id = ? AND line_no = ?
+            """, (sp, order_id, ln))
+
+    # Update admin note if provided
+    if admin_note is not None:
+        cur.execute("UPDATE orders SET admin_note = ? WHERE order_id = ?", (admin_note, order_id))
+
+    # Audit action
+    _add_action(cur, order_id, action_type, action_by, payload)
+
+    # Apply status change + last action + bump version
+    if action_type != "SUBMIT":
+        cur.execute("""
+            UPDATE orders
+            SET status = ?,
+                last_action_at_utc = ?,
+                last_action_by = ?,
+                version = version + 1
+            WHERE order_id = ?
+        """, (new_status, utc_now_iso(), action_by, order_id))
+    else:
+        # If you ever call SUBMIT here, still bump version to be consistent
+        cur.execute("""
+            UPDATE orders
+            SET last_action_at_utc = ?,
+                last_action_by = ?,
+                version = version + 1
+            WHERE order_id = ?
+        """, (utc_now_iso(), action_by, order_id))
+
+    c.commit()
+    c.close()
+
 def _add_action(cur, order_id: str, action_type: str, action_by: str, payload: dict | None = None):
     cur.execute("""
         INSERT INTO order_actions (order_id, action_type, action_at_utc, action_by, payload_json)
@@ -441,11 +569,11 @@ def create_order_from_allocation(
     c = conn()
     cur = c.cursor()
 
-    cur.execute("""
-        INSERT INTO orders
-        (order_id, created_at_utc, created_by, status, supplier_snapshot_id, last_action_at_utc, last_action_by, trader_note, admin_note)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-    """, (order_id, now, created_by, "PENDING", supplier_snapshot_id, now, created_by, trader_note, ""))
+        cur.execute("""
+            INSERT INTO orders
+            (order_id, created_at_utc, created_by, status, supplier_snapshot_id, last_action_at_utc, last_action_by, trader_note, admin_note, version)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+        """, (order_id, now, created_by, "PENDING", supplier_snapshot_id, now, created_by, trader_note, ""))
 
     rows = []
     for i, ln in enumerate(allocation_lines, start=1):
@@ -531,9 +659,9 @@ def get_order_lines(order_id: str) -> pd.DataFrame:
 def get_order_header(order_id: str) -> dict | None:
     c = conn()
     cur = c.cursor()
-    cur.execute("""
+        cur.execute("""
         SELECT order_id, created_at_utc, created_by, status, supplier_snapshot_id,
-               last_action_at_utc, last_action_by, trader_note, admin_note
+               last_action_at_utc, last_action_by, trader_note, admin_note, version
         FROM orders
         WHERE order_id = ?
     """, (order_id,))
@@ -541,9 +669,10 @@ def get_order_header(order_id: str) -> dict | None:
     c.close()
     if not row:
         return None
-    keys = ["order_id","created_at_utc","created_by","status","supplier_snapshot_id","last_action_at_utc","last_action_by","trader_note","admin_note"]
-    return dict(zip(keys, row))
-
+        keys = ["order_id","created_at_utc","created_by","status","supplier_snapshot_id","last_action_at_utc","last_action_by","trader_note","admin_note","version"]
+        out = dict(zip(keys, row))
+        out["version"] = int(out.get("version") or 0)
+        return out
 
 def get_order_actions(order_id: str) -> pd.DataFrame:
     c = conn()
@@ -557,41 +686,34 @@ def get_order_actions(order_id: str) -> pd.DataFrame:
     return df
 
 
-def trader_cancel_order(order_id: str, user: str):
+def trader_cancel_order(order_id: str, user: str, expected_version: int | None = None):
     h = get_order_header(order_id)
     if not h:
         raise ValueError("Order not found.")
     if h["created_by"] != user:
         raise ValueError("Not your order.")
-    if h["status"] not in ("PENDING", "COUNTERED"):
-        raise ValueError(f"Cannot cancel order in status {h['status']}.")
 
-    c = conn()
-    cur = c.cursor()
-    _add_action(cur, order_id, "CANCEL", user)
-    cur.execute("""
-        UPDATE orders SET status='CANCELLED', last_action_at_utc=?, last_action_by=?
-        WHERE order_id=?
-    """, (utc_now_iso(), user, order_id))
-    c.commit()
-    c.close()
+    _transition_order(
+        order_id=order_id,
+        action_type="CANCEL",
+        action_by=user,
+        expected_version=expected_version,
+    )
 
 
-def admin_counter_order(order_id: str, admin_user: str, edited_lines: pd.DataFrame, admin_note: str = ""):
-    """
-    edited_lines must include line_no and Sell Price (and can include Supplier if you want to allow change).
-    MVP: allow editing Sell Price only; supplier/base remain as-is.
-    """
+def admin_counter_order(
+    order_id: str,
+    admin_user: str,
+    edited_lines: pd.DataFrame,
+    admin_note: str = "",
+    expected_version: int | None = None
+):
     h = get_order_header(order_id)
     if not h:
         raise ValueError("Order not found.")
-    if h["status"] not in ("PENDING", "COUNTERED"):
-        raise ValueError(f"Cannot counter order in status {h['status']}.")
 
-    # Load existing for audit diff
     before = get_order_lines(order_id)
 
-    # Normalise
     work = edited_lines.copy()
     if "line_no" not in work.columns:
         raise ValueError("edited_lines must include line_no.")
@@ -600,116 +722,81 @@ def admin_counter_order(order_id: str, admin_user: str, edited_lines: pd.DataFra
 
     work["Sell Price"] = pd.to_numeric(work["Sell Price"], errors="raise")
 
-    c = conn()
-    cur = c.cursor()
-
-    # Update each line sell_price
-    for _, r in work.iterrows():
-        ln = int(r["line_no"])
-        sp = float(r["Sell Price"])
-        cur.execute("""
-            UPDATE order_lines
-            SET sell_price = ?
-            WHERE order_id = ? AND line_no = ?
-        """, (sp, order_id, ln))
-
-    # Update admin note
-    cur.execute("UPDATE orders SET admin_note = ? WHERE order_id = ?", (admin_note, order_id))
-
-    after = get_order_lines(order_id)
-
+    after_preview = before.copy()
+    # Build a payload diff (audit)
     payload = {
         "admin_note": admin_note,
         "diff": {
-            "before": before[["line_no","Sell Price"]].to_dict("records"),
-            "after": after[["line_no","Sell Price"]].to_dict("records"),
+            "before": before[["line_no", "Sell Price"]].to_dict("records"),
+            "after": work[["line_no", "Sell Price"]].to_dict("records"),
         }
     }
 
-    _add_action(cur, order_id, "COUNTER", admin_user, payload)
-    cur.execute("""
-        UPDATE orders SET status='COUNTERED', last_action_at_utc=?, last_action_by=?
-        WHERE order_id=?
-    """, (utc_now_iso(), admin_user, order_id))
+    _transition_order(
+        order_id=order_id,
+        action_type="COUNTER",
+        action_by=admin_user,
+        expected_version=expected_version,
+        admin_note=admin_note,
+        payload=payload,
+        edited_lines=work,
+    )
 
-    c.commit()
-    c.close()
 
-
-def trader_accept_counter(order_id: str, user: str):
+def trader_accept_counter(order_id: str, user: str, expected_version: int | None = None):
     h = get_order_header(order_id)
     if not h:
         raise ValueError("Order not found.")
     if h["created_by"] != user:
         raise ValueError("Not your order.")
-    if h["status"] != "COUNTERED":
-        raise ValueError("Order is not in COUNTERED status.")
 
-    c = conn()
-    cur = c.cursor()
-    _add_action(cur, order_id, "ACCEPT_COUNTER", user)
-    cur.execute("""
-        UPDATE orders SET status='CONFIRMED', last_action_at_utc=?, last_action_by=?
-        WHERE order_id=?
-    """, (utc_now_iso(), user, order_id))
-    c.commit()
-    c.close()
+    _transition_order(
+        order_id=order_id,
+        action_type="ACCEPT_COUNTER",
+        action_by=user,
+        expected_version=expected_version,
+    )
 
 
-def admin_confirm_order(order_id: str, admin_user: str):
+def admin_confirm_order(order_id: str, admin_user: str, expected_version: int | None = None):
     h = get_order_header(order_id)
     if not h:
         raise ValueError("Order not found.")
-    if h["status"] not in ("PENDING", "COUNTERED"):
-        raise ValueError(f"Cannot confirm order in status {h['status']}.")
 
-    c = conn()
-    cur = c.cursor()
-    _add_action(cur, order_id, "CONFIRM", admin_user)
-    cur.execute("""
-        UPDATE orders SET status='CONFIRMED', last_action_at_utc=?, last_action_by=?
-        WHERE order_id=?
-    """, (utc_now_iso(), admin_user, order_id))
-    c.commit()
-    c.close()
+    _transition_order(
+        order_id=order_id,
+        action_type="CONFIRM",
+        action_by=admin_user,
+        expected_version=expected_version,
+    )
 
 
-def admin_reject_order(order_id: str, admin_user: str, admin_note: str = ""):
+def admin_reject_order(order_id: str, admin_user: str, admin_note: str = "", expected_version: int | None = None):
     h = get_order_header(order_id)
     if not h:
         raise ValueError("Order not found.")
-    if h["status"] in ("FILLED", "REJECTED", "CANCELLED"):
-        raise ValueError(f"Cannot reject order in status {h['status']}.")
 
-    c = conn()
-    cur = c.cursor()
-    cur.execute("UPDATE orders SET admin_note = ? WHERE order_id = ?", (admin_note, order_id))
-    _add_action(cur, order_id, "REJECT", admin_user, {"admin_note": admin_note})
-    cur.execute("""
-        UPDATE orders SET status='REJECTED', last_action_at_utc=?, last_action_by=?
-        WHERE order_id=?
-    """, (utc_now_iso(), admin_user, order_id))
-    c.commit()
-    c.close()
+    _transition_order(
+        order_id=order_id,
+        action_type="REJECT",
+        action_by=admin_user,
+        expected_version=expected_version,
+        admin_note=admin_note,
+        payload={"admin_note": admin_note},
+    )
 
 
-def admin_mark_filled(order_id: str, admin_user: str):
+def admin_mark_filled(order_id: str, admin_user: str, expected_version: int | None = None):
     h = get_order_header(order_id)
     if not h:
         raise ValueError("Order not found.")
-    if h["status"] != "CONFIRMED":
-        raise ValueError("Order must be CONFIRMED before it can be FILLED.")
 
-    c = conn()
-    cur = c.cursor()
-    _add_action(cur, order_id, "FILL", admin_user)
-    cur.execute("""
-        UPDATE orders SET status='FILLED', last_action_at_utc=?, last_action_by=?
-        WHERE order_id=?
-    """, (utc_now_iso(), admin_user, order_id))
-    c.commit()
-    c.close()
-
+    _transition_order(
+        order_id=order_id,
+        action_type="FILL",
+        action_by=admin_user,
+        expected_version=expected_version,
+    )
 
 def admin_margin_report() -> pd.DataFrame:
     """
@@ -734,6 +821,7 @@ def admin_margin_report() -> pd.DataFrame:
     """, c)
     c.close()
     return df
+
 
 
 
