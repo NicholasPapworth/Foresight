@@ -501,8 +501,24 @@ def page_admin_orders():
 
         admin_note = st.text_area("Admin note (optional)", value=header.get("admin_note", "") or "")
 
-        editable = lines[["line_no", "Product", "Location", "Delivery Window", "Qty", "Supplier", "Base Price", "Sell Price"]].copy()
-        edited = st.data_editor(editable, use_container_width=True, hide_index=True, num_rows="fixed")
+        editable = lines[["line_no", "Product", "Location", "Delivery Window", "Qty", "Supplier", "Sell Price"]].copy()
+        
+        edited = st.data_editor(
+            editable,
+            use_container_width=True,
+            hide_index=True,
+            num_rows="fixed",
+            disabled=["line_no", "Product", "Location", "Delivery Window", "Qty", "Supplier"],
+            column_config={
+                "Sell Price": st.column_config.NumberColumn(
+                    "Sell Price",
+                    min_value=0.0,
+                    step=0.5,
+                    format="£%.2f",
+                )
+            },
+        )
+
 
         c1, c2, c3 = st.columns([1, 1, 1])
         with c1:
@@ -517,6 +533,14 @@ def page_admin_orders():
         with c2:
             if st.button("Send counter", use_container_width=True):
                 try:
+                    # Validate at least one Sell Price changed
+                    orig = lines.set_index("line_no")["Sell Price"].astype(float)
+                    new = edited.set_index("line_no")["Sell Price"].astype(float)
+            
+                    if (orig == new).all():
+                        st.warning("No Sell Price changes detected. Change at least one line to send a counter.")
+                        return
+            
                     admin_counter_order(
                         order_id,
                         st.session_state.user,
@@ -524,7 +548,6 @@ def page_admin_orders():
                         admin_note=admin_note,
                         expected_version=header["version"]
                     )
-                    
                     st.success("Counter sent. Status = COUNTERED.")
                     st.rerun()
                 except Exception as e:
