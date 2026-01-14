@@ -115,6 +115,7 @@ def init_db():
         last_action_by TEXT NOT NULL,
         trader_note TEXT,
         admin_note TEXT,
+        version INTEGER NOT NULL DEFAULT 0,
         FOREIGN KEY (supplier_snapshot_id) REFERENCES supplier_snapshots(snapshot_id)
     );
     """)
@@ -152,6 +153,13 @@ def init_db():
     cur.execute("CREATE INDEX IF NOT EXISTS idx_orders_by_user ON orders(created_by, created_at_utc);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_orders_status ON orders(status, created_at_utc);")
     cur.execute("CREATE INDEX IF NOT EXISTS idx_actions_order ON order_actions(order_id, action_at_utc);")
+
+    # --- Orders optimistic locking (version) ---
+    # Adds version column safely if DB already exists.
+    try:
+        cur.execute("ALTER TABLE orders ADD COLUMN version INTEGER NOT NULL DEFAULT 0;")
+    except Exception:
+        pass
 
     c.commit()
     c.close()
@@ -434,6 +442,17 @@ ALLOWED_TRANSITIONS = {
     "CANCELLED": {},
 }
 
+def _add_action(cur, order_id: str, action_type: str, action_by: str, payload: dict | None = None):
+    cur.execute("""
+        INSERT INTO order_actions (order_id, action_type, action_at_utc, action_by, payload_json)
+        VALUES (?, ?, ?, ?, ?)
+    """, (
+        order_id,
+        action_type,
+        utc_now_iso(),
+        action_by,
+        None if payload is None else json.dumps(payload)
+    ))
 
 def _transition_order(
     order_id: str,
@@ -537,19 +556,6 @@ def _transition_order(
     c.commit()
     c.close()
 
-def _add_action(cur, order_id: str, action_type: str, action_by: str, payload: dict | None = None):
-    cur.execute("""
-        INSERT INTO order_actions (order_id, action_type, action_at_utc, action_by, payload_json)
-        VALUES (?, ?, ?, ?, ?)
-    """, (
-        order_id,
-        action_type,
-        utc_now_iso(),
-        action_by,
-        None if payload is None else json.dumps(payload)
-    ))
-
-
 def create_order_from_allocation(
     created_by: str,
     supplier_snapshot_id: str,
@@ -569,11 +575,11 @@ def create_order_from_allocation(
     c = conn()
     cur = c.cursor()
 
-        cur.execute("""
-            INSERT INTO orders
-            (order_id, created_at_utc, created_by, status, supplier_snapshot_id, last_action_at_utc, last_action_by, trader_note, admin_note, version)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
-        """, (order_id, now, created_by, "PENDING", supplier_snapshot_id, now, created_by, trader_note, ""))
+    cur.execute("""
+        INSERT INTO orders
+        (order_id, created_at_utc, created_by, status, supplier_snapshot_id, last_action_at_utc, last_action_by, trader_note, admin_note, version)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)
+    """, (order_id, now, created_by, "PENDING", supplier_snapshot_id, now, created_by, trader_note, ""))
 
     rows = []
     for i, ln in enumerate(allocation_lines, start=1):
@@ -659,7 +665,7 @@ def get_order_lines(order_id: str) -> pd.DataFrame:
 def get_order_header(order_id: str) -> dict | None:
     c = conn()
     cur = c.cursor()
-        cur.execute("""
+    cur.execute("""
         SELECT order_id, created_at_utc, created_by, status, supplier_snapshot_id,
                last_action_at_utc, last_action_by, trader_note, admin_note, version
         FROM orders
@@ -667,12 +673,17 @@ def get_order_header(order_id: str) -> dict | None:
     """, (order_id,))
     row = cur.fetchone()
     c.close()
+
     if not row:
         return None
-        keys = ["order_id","created_at_utc","created_by","status","supplier_snapshot_id","last_action_at_utc","last_action_by","trader_note","admin_note","version"]
-        out = dict(zip(keys, row))
-        out["version"] = int(out.get("version") or 0)
-        return out
+
+    keys = [
+        "order_id","created_at_utc","created_by","status","supplier_snapshot_id",
+        "last_action_at_utc","last_action_by","trader_note","admin_note","version"
+    ]
+    out = dict(zip(keys, row))
+    out["version"] = int(out.get("version") or 0)
+    return out
 
 def get_order_actions(order_id: str) -> pd.DataFrame:
     c = conn()
@@ -821,6 +832,7 @@ def admin_margin_report() -> pd.DataFrame:
     """, c)
     c.close()
     return df
+
 
 
 
