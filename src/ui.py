@@ -599,6 +599,100 @@ def page_trader_best_prices():
 
     board = _best_prices_board(df)
 
+    # --- Filters ---
+    st.markdown("### Filters")
+    f1, f2, f3, f4 = st.columns([2, 2, 2, 2])
+
+    with f1:
+        cats = ["ALL"] + sorted(board["Product Category"].unique().tolist())
+        cat = st.selectbox("Product Category", cats)
+
+    with f2:
+        prods = ["ALL"] + sorted(board["Product"].unique().tolist())
+        prod = st.selectbox("Product", prods)
+
+    with f3:
+        locs = ["ALL"] + sorted(board["Location"].unique().tolist())
+        loc = st.selectbox("Location", locs)
+
+    with f4:
+        wins = ["ALL"] + sorted(board["Delivery Window"].unique().tolist())
+        win = st.selectbox("Delivery Window", wins)
+
+    view = board.copy()
+    if cat != "ALL":
+        view = view[view["Product Category"] == cat]
+    if prod != "ALL":
+        view = view[view["Product"] == prod]
+    if loc != "ALL":
+        view = view[view["Location"] == loc]
+    if win != "ALL":
+        view = view[view["Delivery Window"] == win]
+
+    st.divider()
+    st.caption(f"Supplier snapshot: {sid[:8]} | Rows: {len(view)}")
+
+    # --- Basket expiry (same behaviour as pricing page) ---
+    _ensure_basket()
+    settings = get_settings()
+    timeout_min = int(settings.get("basket_timeout_minutes", "20"))
+    age_sec = time.time() - st.session_state.basket_created_at
+    if age_sec > timeout_min * 60:
+        st.session_state.basket = []
+        st.session_state.basket_created_at = time.time()
+        st.info("Basket expired and has been cleared.")
+
+    # --- One-click add to basket ---
+    st.markdown("### Add to basket from board")
+    qty = st.number_input("Qty (t) for selected lines", min_value=0.0, value=10.0, step=1.0)
+
+    editable = view.rename(columns={
+        "Product Category": "Category",
+        "Delivery Window": "Window",
+    }).copy()
+    editable.insert(0, "Add", False)
+
+    edited = st.data_editor(
+        editable[["Add", "Category", "Product", "Location", "Window", "Best Price", "Unit", "Supplier"]],
+        use_container_width=True,
+        hide_index=True,
+        disabled=["Category", "Product", "Location", "Window", "Best Price", "Unit", "Supplier"],
+        column_config={
+            "Add": st.column_config.CheckboxColumn("Add"),
+            "Best Price": st.column_config.NumberColumn("Best Price", format="£%.2f"),
+        },
+        key="best_prices_board_editor",
+    )
+
+    if st.button("Add selected lines to basket", type="primary", use_container_width=True):
+        selected = edited[edited["Add"] == True].copy()
+        if selected.empty:
+            st.warning("Tick at least one line.")
+        else:
+            for _, r in selected.iterrows():
+                st.session_state.basket.append({
+                    "Product": r["Product"],
+                    "Location": r["Location"],
+                    "Delivery Window": r["Window"],
+                    "Qty": float(qty),
+                })
+            st.success(f"Added {len(selected)} line(s) to basket.")
+            st.info("Go to Trader | Pricing to optimise and submit the order.")
+            st.rerun()
+
+    st.divider()
+
+    # Show ONE table only (avoid the duplication you complained about)
+    st.dataframe(
+        view.rename(columns={"Product Category": "Category", "Delivery Window": "Window"})[
+            ["Category", "Product", "Location", "Window", "Best Price", "Unit", "Supplier"]
+        ],
+        use_container_width=True,
+        hide_index=True,
+        column_config={"Best Price": st.column_config.NumberColumn("Best Price", format="£%.2f")},
+    )
+
+
 def _ensure_session_id():
     if "presence_session_id" not in st.session_state:
         st.session_state.presence_session_id = str(uuid.uuid4())
@@ -606,6 +700,58 @@ def _ensure_session_id():
 
 def _utc_parse(ts: str):
     return datetime.fromisoformat(ts)
+
+
+def render_presence_panel(current_page_name: str, *, refresh_ms: int = 10_000):
+    """
+    Sidebar presence panel only.
+    """
+    _ensure_session_id()
+
+    user = st.session_state.get("user", "")
+    role = st.session_state.get("role", "")
+    session_id = st.session_state.presence_session_id
+
+    presence_heartbeat(user=user, role=role, page=current_page_name, session_id=session_id)
+
+    try:
+        from streamlit_autorefresh import st_autorefresh
+        st_autorefresh(interval=refresh_ms, key="presence_autorefresh")
+    except Exception:
+        pass
+
+    df = list_online_users(online_within_seconds=45)
+
+    prev = set(st.session_state.get("presence_prev_online", []))
+    now = set(df["user"].tolist()) if not df.empty else set()
+
+    if "presence_prev_online" in st.session_state:
+        for u in sorted(now - prev):
+            st.toast(f"{u} is now online")
+        for u in sorted(prev - now):
+            st.toast(f"{u} went offline")
+
+    st.session_state.presence_prev_online = list(now)
+
+    st.markdown("### Online now")
+    if df.empty:
+        st.caption("No active users detected.")
+        return
+
+    now_dt = datetime.now(timezone.utc)
+    rows = []
+    for _, r in df.iterrows():
+        last_seen = _utc_parse(r["last_seen_utc"])
+        sec_ago = int((now_dt - last_seen).total_seconds())
+        rows.append({
+            "User": r["user"],
+            "Role": r.get("role", "") or "",
+            "Page": r.get("page", "") or "",
+            "Last seen": f"{sec_ago}s ago",
+        })
+
+    out = pd.DataFrame(rows)
+    st.dataframe(out, use_container_width=True, hide_index=True)
 
 
 def render_presence_panel(current_page_name: str, *, refresh_ms: int = 10_000):
