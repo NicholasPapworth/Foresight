@@ -53,7 +53,6 @@ def _ensure_basket():
         st.session_state.basket = []
         st.session_state.basket_created_at = time.time()
 
-
 def _best_prices_board(df: pd.DataFrame) -> pd.DataFrame:
     """
     Returns best (lowest) SELL price per:
@@ -69,7 +68,6 @@ def _best_prices_board(df: pd.DataFrame) -> pd.DataFrame:
         if col not in work.columns:
             raise ValueError(f"Missing column '{col}' needed for best price board.")
 
-    # Normalise + numeric
     work["Product Category"] = work["Product Category"].fillna("").astype(str)
     work["Product"] = work["Product"].fillna("").astype(str)
     work["Location"] = work["Location"].fillna("").astype(str)
@@ -79,16 +77,12 @@ def _best_prices_board(df: pd.DataFrame) -> pd.DataFrame:
     work["Sell Price"] = pd.to_numeric(work["Sell Price"], errors="raise")
 
     group_cols = ["Product Category", "Product", "Location", "Delivery Window"]
-
-    # Pick the cheapest supplier row per group
     idx = work.groupby(group_cols)["Sell Price"].idxmin()
     best = work.loc[idx, group_cols + ["Sell Price", "Unit", "Supplier"]].copy()
 
     best = best.rename(columns={"Sell Price": "Best Price"})
     best = best.sort_values(["Product Category", "Product", "Location", "Delivery Window"]).reset_index(drop=True)
-
     return best
-
 
     _ensure_basket()
 
@@ -677,6 +671,103 @@ def page_history():
         df = df[df.apply(lambda r: any(ql in str(v).lower() for v in r.values), axis=1)]
 
     st.dataframe(df, use_container_width=True, hide_index=True)
+
+def page_trader_best_prices():
+    st.subheader("Trader | Best Prices")
+
+    sid, df = _get_latest_prices_df()
+    if df is None:
+        st.warning("No supplier snapshot available. Admin must publish one.")
+        return
+
+    # Apply margins so Best Price reflects SELL (incl margin)
+    margins = get_effective_margins()
+    df = apply_margins(df, margins)
+
+    board = _best_prices_board(df)
+
+    # --- Filters ---
+    st.markdown("### Filters")
+    f1, f2, f3, f4 = st.columns([2, 2, 2, 2])
+
+    with f1:
+        cats = ["ALL"] + sorted(board["Product Category"].unique().tolist())
+        cat = st.selectbox("Product Category", cats)
+
+    with f2:
+        prods = ["ALL"] + sorted(board["Product"].unique().tolist())
+        prod = st.selectbox("Product", prods)
+
+    with f3:
+        locs = ["ALL"] + sorted(board["Location"].unique().tolist())
+        loc = st.selectbox("Location", locs)
+
+    with f4:
+        wins = ["ALL"] + sorted(board["Delivery Window"].unique().tolist())
+        win = st.selectbox("Delivery Window", wins)
+
+    view = board.copy()
+    if cat != "ALL":
+        view = view[view["Product Category"] == cat]
+    if prod != "ALL":
+        view = view[view["Product"] == prod]
+    if loc != "ALL":
+        view = view[view["Location"] == loc]
+    if win != "ALL":
+        view = view[view["Delivery Window"] == win]
+
+    st.divider()
+    st.caption(f"Supplier snapshot: {sid[:8]} | Rows: {len(view)}")
+
+    # --- One-click add to basket ---
+    _ensure_basket()
+    st.markdown("### Add to basket from board")
+
+    qty = st.number_input("Qty (t) for selected lines", min_value=0.0, value=10.0, step=1.0)
+
+    editable = view.rename(columns={
+        "Product Category": "Category",
+        "Delivery Window": "Window",
+    }).copy()
+    editable.insert(0, "Add", False)
+
+    edited = st.data_editor(
+        editable[["Add", "Category", "Product", "Location", "Window", "Best Price", "Unit", "Supplier"]],
+        use_container_width=True,
+        hide_index=True,
+        disabled=["Category", "Product", "Location", "Window", "Best Price", "Unit", "Supplier"],
+        column_config={
+            "Add": st.column_config.CheckboxColumn("Add"),
+            "Best Price": st.column_config.NumberColumn("Best Price", format="£%.2f"),
+        },
+        key="best_prices_board_editor",
+    )
+
+    if st.button("Add selected lines to basket", type="primary", use_container_width=True):
+        selected = edited[edited["Add"] == True].copy()
+        if selected.empty:
+            st.warning("Tick at least one line.")
+        else:
+            for _, r in selected.iterrows():
+                st.session_state.basket.append({
+                    "Product": r["Product"],
+                    "Location": r["Location"],
+                    "Delivery Window": r["Window"],
+                    "Qty": float(qty),
+                })
+            st.success(f"Added {len(selected)} line(s) to basket.")
+            st.rerun()
+
+    st.divider()
+
+    # Optional: also show a clean non-edit table below (visual-only)
+    show = view.rename(columns={"Product Category": "Category", "Delivery Window": "Window"})
+    st.dataframe(
+        show[["Category", "Product", "Location", "Window", "Best Price", "Unit", "Supplier"]],
+        use_container_width=True,
+        hide_index=True,
+        column_config={"Best Price": st.column_config.NumberColumn("Best Price", format="£%.2f")},
+    )
 
 
 
