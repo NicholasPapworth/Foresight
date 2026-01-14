@@ -914,33 +914,38 @@ def admin_margin_report() -> pd.DataFrame:
     """, c)
     c.close()
     return df
-def admin_blotter_lines():
+
+def admin_blotter_lines() -> pd.DataFrame:
     """
     Line-level blotter for FILLED orders.
-    Returns: one row per order line with dimensions for filtering.
+    Returns one row per order line with dimensions for filtering.
     """
-    conn = get_conn()  # use whatever your db connector is called
+    c = conn()
     q = """
     SELECT
         o.order_id,
         o.created_at_utc,
         o.created_by,
         l.line_no,
-        l."Product Category"   AS product_category,
-        l."Product"            AS product,
-        l."Location"           AS location,
-        l."Delivery Window"    AS delivery_window,
-        l."Supplier"           AS supplier,
-        l."Qty"                AS qty,
-        l."Base Price"         AS base_price,
-        l."Sell Price"         AS sell_price
+        l.product_category  AS product_category,
+        l.product           AS product,
+        l.location          AS location,
+        l.delivery_window   AS delivery_window,
+        l.supplier          AS supplier,
+        l.qty               AS qty,
+        l.base_price        AS base_price,
+        l.sell_price        AS sell_price
     FROM orders o
     JOIN order_lines l
       ON l.order_id = o.order_id
     WHERE o.status = 'FILLED'
     ORDER BY o.created_at_utc DESC, o.order_id, l.line_no
     """
-    return pd.read_sql_query(q, conn)
+    df = pd.read_sql_query(q, c)
+    c.close()
+    return df
+
+
 
 
 
