@@ -680,15 +680,6 @@ def page_trader_best_prices():
 
     st.divider()
 
-    # Optional: also show a clean non-edit table below (visual-only)
-    show = view.rename(columns={"Product Category": "Category", "Delivery Window": "Window"})
-    st.dataframe(
-        show[["Category", "Product", "Location", "Window", "Best Price", "Unit", "Supplier"]],
-        use_container_width=True,
-        hide_index=True,
-        column_config={"Best Price": st.column_config.NumberColumn("Best Price", format="£%.2f")},
-    )
-
 
 
 
