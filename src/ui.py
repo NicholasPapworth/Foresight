@@ -6,10 +6,12 @@ from src.db import (
     get_settings, set_setting,
     get_small_lot_tiers, save_small_lot_tiers,
     latest_supplier_snapshot, list_supplier_snapshots,
-    load_supplier_prices, publish_supplier_snapshot
+    load_supplier_prices, publish_supplier_snapshot,
+    add_margin, list_margins, deactivate_margin, get_effective_margins
 )
 from src.validation import load_supplier_sheet
 from src.optimizer import optimise_basket
+from src.pricing import apply_margins
 
 LOGO_PATH = "assets/logo.svg"
 
@@ -39,6 +41,20 @@ def _get_latest_prices_df():
         return None, None
     sid, ts, by = snap
     df = load_supplier_prices(sid)
+        margins = get_effective_margins()
+    df = apply_margins(df, margins)
+
+    # Traders should not see margins; show Sell Price as Price
+    df["Price"] = df["Sell Price"]
+    df = df.drop(columns=["Sell Price"], errors="ignore")
+
+    margins = get_effective_margins()
+    df = apply_margins(df, margins)
+
+    # Traders should not see margins; show Sell Price as Price
+    df["Price"] = df["Sell Price"]
+    df = df.drop(columns=["Sell Price"], errors="ignore")
+
     return sid, df
 
 
@@ -108,6 +124,41 @@ def page_admin():
             st.rerun()
         except Exception as e:
             st.error(str(e))
+        st.divider()
+    st.markdown("### Admin margins (hidden from traders)")
+
+    # View active margins
+    mdf = list_margins(active_only=True)
+    if mdf.empty:
+        st.info("No active margins set.")
+    else:
+        show = mdf[["margin_id", "scope_type", "scope_value", "margin_per_t", "created_at_utc", "created_by"]].copy()
+        show = show.rename(columns={"margin_per_t": "Margin (£/t)"})
+        st.dataframe(show, use_container_width=True, hide_index=True)
+
+        # Deactivate margin
+        mid = st.number_input("Deactivate margin_id", min_value=0, value=0, step=1)
+        if st.button("Deactivate selected margin", use_container_width=True):
+            if mid <= 0:
+                st.error("Enter a valid margin_id.")
+            else:
+                deactivate_margin(int(mid))
+                st.success(f"Deactivated margin_id={int(mid)}")
+                st.rerun()
+
+    st.markdown("#### Add new margin")
+
+    scope_type = st.selectbox("Scope", ["category", "product"])
+    scope_value = st.text_input("Category/Product name (exact match)")
+    margin_per_t = st.number_input("Margin (£/t)", value=0.0, step=0.5)
+
+    if st.button("Add margin", type="primary", use_container_width=True):
+        try:
+            add_margin(scope_type, scope_value, float(margin_per_t), st.session_state.get("user", "unknown"))
+            st.success("Margin added.")
+            st.rerun()
+        except Exception as e:
+            st.error(str(e))
 
     st.divider()
 
@@ -162,6 +213,11 @@ def page_trader():
     settings = get_settings()
     timeout_min = int(settings.get("basket_timeout_minutes", "20"))
     tiers = get_small_lot_tiers()
+    
+    # Apply effective margins (product overrides category)
+    margins = get_effective_margins()
+    df = apply_margins(df, margins)
+
 
     # Basket state
     if "basket" not in st.session_state:
@@ -209,11 +265,16 @@ def page_trader():
             st.rerun()
 
         if st.button("Optimise", type="primary", use_container_width=True):
+            sell_prices = df[["Supplier", "Product", "Location", "Delivery Window", "Sell Price"]].rename(
+                columns={"Sell Price": "Price"}
+            )
+
             res = optimise_basket(
-                supplier_prices=df[["Supplier", "Product", "Location", "Delivery Window", "Price"]],
+                supplier_prices=sell_prices,
                 basket=st.session_state.basket,
                 tiers=tiers
             )
+
             if not res.get("ok"):
                 st.error(res.get("error", "Unknown error"))
                 return
