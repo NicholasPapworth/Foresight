@@ -825,29 +825,25 @@ def page_admin_blotter():
 
     df = rep.copy()
 
-        # --- NORMALISE COLUMN NAMES ---
-    # admin_margin_report() might return snake_case or other names.
-    # We map whatever exists into the canonical names this page expects.
-
+    # --- NORMALISE COLUMN NAMES ---
+    # Map whatever the DB returns into canonical names used by this page.
     def pick(*cands):
         for c in cands:
             if c in df.columns:
                 return c
         return None
 
-    qty_col = pick("Qty", "qty", "qty_t", "tonnes", "Tonnes")
-    sell_col = pick("Sell Price", "sell_price", "sell_price_per_t", "sell_price_gbp", "sell_price_per_t_gbp")
-    base_col = pick("Base Price", "base_price", "base_price_per_t", "base_price_gbp", "base_price_per_t_gbp")
+    qty_col  = pick("Qty", "qty", "total_tonnes", "tonnes", "Tonnes")
+    sell_col = pick("Sell Price", "sell_price", "sell_price_per_t", "SellPrice")
+    base_col = pick("Base Price", "base_price", "base_price_per_t", "BasePrice")
 
-    # Optional dims (only used for filtering/grouping)
     created_by_col = pick("created_by", "Created By", "trader", "Trader")
-    prod_cat_col = pick("Product Category", "product_category", "Category", "category", "Product group", "product_group")
-    product_col = pick("Product", "product")
-    location_col = pick("Location", "location", "Region", "region")
-    window_col = pick("Delivery Window", "delivery_window", "Window", "window")
-    supplier_col = pick("Supplier", "supplier")
+    prod_cat_col   = pick("Product Category", "product_category", "Category", "category", "product_group")
+    product_col    = pick("Product", "product")
+    location_col   = pick("Location", "location", "Region", "region")
+    window_col     = pick("Delivery Window", "delivery_window", "Window", "window")
+    supplier_col   = pick("Supplier", "supplier")
 
-    # Rename into canonical names used below
     rename_map = {}
     if qty_col and qty_col != "Qty": rename_map[qty_col] = "Qty"
     if sell_col and sell_col != "Sell Price": rename_map[sell_col] = "Sell Price"
@@ -863,12 +859,12 @@ def page_admin_blotter():
     if rename_map:
         df = df.rename(columns=rename_map)
 
-    # Hard stop if core columns are still missing
+    # --- Hard stop if core columns missing ---
     required = ["Qty", "Sell Price", "Base Price"]
     missing = [c for c in required if c not in df.columns]
     if missing:
         st.error(
-            "Blotter cannot run because admin_margin_report() does not return the required columns: "
+            "Blotter cannot run because admin_blotter_lines() does not return the required columns: "
             + ", ".join(missing)
             + f"\n\nAvailable columns: {list(df.columns)}"
         )
@@ -878,33 +874,23 @@ def page_admin_blotter():
     if "created_at_utc" in df.columns:
         df["created_at_utc"] = pd.to_datetime(df["created_at_utc"], errors="coerce", utc=True)
 
-    for c in ["Qty", "Base Price", "Sell Price"]:
-        if c in df.columns:
-            df[c] = pd.to_numeric(df[c], errors="coerce")
+    df["Qty"] = pd.to_numeric(df["Qty"], errors="coerce").fillna(0.0)
+    df["Sell Price"] = pd.to_numeric(df["Sell Price"], errors="coerce").fillna(0.0)
+    df["Base Price"] = pd.to_numeric(df["Base Price"], errors="coerce").fillna(0.0)
 
-        df = rep.copy()
+    # ---- Derived metrics ----
+    df["sell_value"] = df["Sell Price"] * df["Qty"]
+    df["base_value"] = df["Base Price"] * df["Qty"]
+    df["gross_margin"] = df["sell_value"] - df["base_value"]
+    df["gm_pct"] = (df["gross_margin"] / df["sell_value"]) * 100.0
+    df["gm_pct"] = df["gm_pct"].where(df["sell_value"] != 0, 0.0)
 
-        # Type fixes
-        df["created_at_utc"] = pd.to_datetime(df["created_at_utc"], errors="coerce", utc=True)
-        df["qty"] = pd.to_numeric(df["qty"], errors="coerce").fillna(0.0)
-        df["base_price"] = pd.to_numeric(df["base_price"], errors="coerce").fillna(0.0)
-        df["sell_price"] = pd.to_numeric(df["sell_price"], errors="coerce").fillna(0.0)
-    
-        # Derived
-        df["sell_value"] = df["sell_price"] * df["qty"]
-        df["base_value"] = df["base_price"] * df["qty"]
-        df["gross_margin"] = df["sell_value"] - df["base_value"]
-        df["gm_pct"] = (df["gross_margin"] / df["sell_value"]) * 100.0
-        df["gm_pct"] = df["gm_pct"].where(df["sell_value"] != 0, 0.0)
-
-
-    # ---- Filters (top row) ----
+    # ---- Filters ----
     st.markdown("### Filters")
     f1, f2, f3, f4 = st.columns([2, 2, 2, 2])
 
-    # Column names (adjust here if yours differ)
     trader_col = "created_by" if "created_by" in df.columns else None
-    cat_col = "Product Category" if "Product Category" in df.columns else ("Category" if "Category" in df.columns else None)
+    cat_col = "Product Category" if "Product Category" in df.columns else None
 
     with f1:
         traders = ["ALL"] + (sorted(df[trader_col].dropna().unique().tolist()) if trader_col else [])
@@ -951,11 +937,12 @@ def page_admin_blotter():
     # ---- Grouping ----
     st.markdown("### Grouped summary")
     group_options = []
-    for c in ["created_by", cat_col, "Product", "Location", "Delivery Window", "Supplier"]:
-        if c and c in view.columns:
+    for c in ["created_by", "Product Category", "Product", "Location", "Delivery Window", "Supplier"]:
+        if c in view.columns:
             group_options.append(c)
 
-    group_by = st.multiselect("Group by", options=group_options, default=[c for c in ["created_by", "Location"] if c in group_options])
+    default_groups = [c for c in ["created_by", "Location"] if c in group_options]
+    group_by = st.multiselect("Group by", options=group_options, default=default_groups)
 
     if not group_by:
         st.info("Select at least one field in 'Group by'.")
