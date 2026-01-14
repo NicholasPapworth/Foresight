@@ -19,26 +19,25 @@ if not require_login():
 
 render_header()
 
-# --- Navigation (grouped) ---
+# Navigation (single control)
+pages = {
+    "Trader | Pricing": page_trader_pricing,
+    "Trader | Best Prices": page_trader_best_prices,
+    "Trader | Orders": page_trader_orders,
+    "History": page_history,
+}
+
+if st.session_state.get("role") == "admin":
+    pages.update({
+        "Admin | Pricing": page_admin_pricing,
+        "Admin | Orders": page_admin_orders,
+    })
+
 with st.sidebar:
     st.markdown("### Navigation")
+    choice = st.radio("", list(pages.keys()), key="nav_choice")
 
-    st.markdown("**Trader**")
-    trader_choice = st.radio(
-        "",
-        ["Pricing", "Best Prices", "Orders", "History"],
-        key="nav_trader"
-    )
-
-    admin_choice = None
-    if st.session_state.get("role") == "admin":
-        st.markdown("---")
-        st.markdown("**Admin**")
-        admin_choice = st.radio(
-            "",
-            ["Admin Pricing", "Admin Orders"],
-            key="nav_admin"
-        )
+pages[choice]()
 
 # --- Route ---
 routes = {
