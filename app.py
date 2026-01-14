@@ -1,6 +1,7 @@
 import streamlit as st
 from src.db import init_db
 from src.auth import require_login
+from src.ui import render_presence_panel
 from src.ui import (
     render_header,
     page_trader_pricing,
@@ -36,6 +37,9 @@ if st.session_state.get("role") == "admin":
 with st.sidebar:
     st.markdown("### Navigation")
     choice = st.radio("", list(pages.keys()), key="nav_choice")
+
+    st.divider()
+    render_presence_panel(choice)   # <-- presence panel below nav
 
 pages[choice]()
 
