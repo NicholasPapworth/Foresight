@@ -48,6 +48,7 @@ def _get_latest_prices_df():
     df = load_supplier_prices(sid)
     return sid, df
 
+
 def _best_prices_board(df: pd.DataFrame) -> pd.DataFrame:
     """
     Returns best (lowest) SELL price per Product Category/Product/Location/Delivery Window.
@@ -64,6 +65,9 @@ def _best_prices_board(df: pd.DataFrame) -> pd.DataFrame:
     work["Product Category"] = work["Product Category"].fillna("").astype(str)
     work["Location"] = work["Location"].fillna("").astype(str)
 
+    # Ensure numeric (critical for idxmin correctness)
+    work["Sell Price"] = pd.to_numeric(work["Sell Price"], errors="raise")
+
     group_cols = ["Product Category", "Product", "Location", "Delivery Window"]
 
     # Find the row index of the minimum Sell Price per group
@@ -75,6 +79,7 @@ def _best_prices_board(df: pd.DataFrame) -> pd.DataFrame:
     }).sort_values(["Product Category", "Product", "Location", "Delivery Window"])
 
     return best.reset_index(drop=True)
+
 
 def page_trader_best_prices():
     st.subheader("Trader — Best Prices")
@@ -95,7 +100,8 @@ def page_trader_best_prices():
     f1, f2, f3, f4 = st.columns([2, 2, 2, 2])
 
     with f1:
-        cats = ["ALL"] + sorted([c for c in board["Product Category"].unique().tolist() if c != ""])
+        # Include blanks explicitly (better UX than silently dropping them)
+        cats = ["ALL"] + sorted(board["Product Category"].unique().tolist())
         cat = st.selectbox("Product Category", cats)
 
     with f2:
@@ -125,7 +131,6 @@ def page_trader_best_prices():
     # --- Display ---
     st.caption(f"Supplier snapshot: {sid[:8]} | Rows: {len(view)}")
 
-    # Pretty table (clean column names)
     show = view.rename(columns={
         "Product Category": "Category",
         "Delivery Window": "Window",
@@ -256,8 +261,6 @@ def page_trader_pricing():
     trader_note = st.text_area("Order note (optional)", placeholder="Customer/account, terms, anything relevant.")
 
     if st.button("Submit order to Admin", type="primary", use_container_width=True):
-        # Build allocation lines for order snapshot
-        # Need Base Price and Unit too -> look up from df (which still has base Price and Unit)
         alloc_lines = []
         for r in res["allocation"]:
             prod = r["Product"]
@@ -266,14 +269,12 @@ def page_trader_pricing():
             sup = r["Supplier"]
             qty = float(r["Qty"])
 
-            # Lookup base price + unit from supplier snapshot df
             match = df[
                 (df["Product"] == prod) &
                 (df["Location"] == loc) &
                 (df["Delivery Window"] == win)
             ].copy()
 
-            # match is across suppliers; find the chosen supplier row
             match = match[match["Supplier"] == sup]
             if match.empty:
                 st.error(f"Internal error: could not find base row for {prod}/{loc}/{win}/{sup}")
@@ -303,7 +304,6 @@ def page_trader_pricing():
                 allocation_lines=alloc_lines,
                 trader_note=trader_note
             )
-            # clear basket + last optim
             st.session_state.basket = []
             st.session_state.basket_created_at = time.time()
             st.session_state.last_optim_result = None
@@ -322,7 +322,6 @@ def page_trader_orders():
         st.info("No orders yet.")
         return
 
-    # Basic filters
     status = st.selectbox("Filter status", ["ALL", "PENDING", "COUNTERED", "CONFIRMED", "FILLED", "REJECTED", "CANCELLED"])
     work = df.copy()
     if status != "ALL":
@@ -343,28 +342,26 @@ def page_trader_orders():
     c2.metric("Status", header["status"])
     c3.metric("Snapshot", header["supplier_snapshot_id"][:8] if header.get("supplier_snapshot_id") else "")
     c4.metric("Created (UTC)", str(header["created_at_utc"])[:19])
-    
+
     if header.get("trader_note"):
         st.caption(f"Trader note: {header['trader_note']}")
     if header.get("admin_note"):
         st.caption(f"Admin note: {header['admin_note']}")
-    
+
     with st.expander("Show technical details", expanded=False):
         st.json(header)
 
     st.markdown("### Lines")
     st.dataframe(lines, use_container_width=True, hide_index=True)
 
-    # Totals + margin display to trader: show totals only (no margin)
-    base = float((lines["Sell Price"] * lines["Qty"]).sum())
-    st.write({"Sell value": base})
+    sell_total = float((lines["Sell Price"] * lines["Qty"]).sum())
+    st.write({"Sell value": sell_total})
 
     st.markdown("### Timeline")
-    st.dataframe(actions[["action_type","action_at_utc","action_by"]], use_container_width=True, hide_index=True)
+    st.dataframe(actions[["action_type", "action_at_utc", "action_by"]], use_container_width=True, hide_index=True)
 
     st.divider()
 
-    # Trader actions
     if header["status"] in ("PENDING", "COUNTERED"):
         if st.button("Cancel order", use_container_width=True):
             try:
@@ -395,7 +392,6 @@ def page_admin_pricing():
 
     st.subheader("Admin | Pricing")
 
-    # Settings
     settings = get_settings()
     timeout = st.number_input(
         "Basket timeout (minutes)",
@@ -408,7 +404,6 @@ def page_admin_pricing():
 
     st.divider()
 
-    # Tiers
     st.markdown("### Small-lot tiers")
     tiers = get_small_lot_tiers()
     if tiers is None or tiers.empty:
@@ -446,13 +441,12 @@ def page_admin_pricing():
 
     st.divider()
 
-    # Margins
     st.markdown("### Admin margins")
     mdf = list_margins(active_only=True)
     if mdf.empty:
         st.info("No active margins set.")
     else:
-        show = mdf[["margin_id","scope_type","scope_value","margin_per_t","created_at_utc","created_by"]].copy()
+        show = mdf[["margin_id", "scope_type", "scope_value", "margin_per_t", "created_at_utc", "created_by"]].copy()
         show = show.rename(columns={"margin_per_t": "Margin (£/t)"})
         st.dataframe(show, use_container_width=True, hide_index=True)
 
@@ -471,7 +465,7 @@ def page_admin_pricing():
     margin_per_t = st.number_input("Margin (£/t)", value=0.0, step=0.5)
     if st.button("Add margin", type="primary", use_container_width=True):
         try:
-            add_margin(scope_type, scope_value, float(margin_per_t), st.session_state.get("user","unknown"))
+            add_margin(scope_type, scope_value, float(margin_per_t), st.session_state.get("user", "unknown"))
             st.success("Margin added.")
             st.rerun()
         except Exception as e:
@@ -479,7 +473,6 @@ def page_admin_pricing():
 
     st.divider()
 
-    # Upload supplier prices
     st.markdown("### Upload supplier prices (SUPPLIER_PRICES)")
     up = st.file_uploader("Upload Excel", type=["xlsx"])
     if up:
@@ -489,7 +482,7 @@ def page_admin_pricing():
             st.success("Validated. Preview:")
             st.dataframe(df, use_container_width=True, hide_index=True)
             if st.button("Publish supplier snapshot", type="primary", use_container_width=True):
-                sid = publish_supplier_snapshot(df, st.session_state.get("user","unknown"), content)
+                sid = publish_supplier_snapshot(df, st.session_state.get("user", "unknown"), content)
                 st.success(f"Published supplier snapshot: {sid}")
                 st.rerun()
         except Exception as e:
@@ -503,7 +496,7 @@ def page_admin_orders():
 
     st.subheader("Admin | Orders")
 
-    status = st.selectbox("Status filter", ["ALL","PENDING","COUNTERED","CONFIRMED","FILLED","REJECTED","CANCELLED"])
+    status = st.selectbox("Status filter", ["ALL", "PENDING", "COUNTERED", "CONFIRMED", "FILLED", "REJECTED", "CANCELLED"])
     if status == "ALL":
         odf = list_orders_admin(None)
     else:
@@ -529,40 +522,37 @@ def page_admin_orders():
     c2.metric("Status", header["status"])
     c3.metric("Trader", header["created_by"])
     c4.metric("Created (UTC)", str(header["created_at_utc"])[:19])
-    
+
     if header.get("trader_note"):
         st.caption(f"Trader note: {header['trader_note']}")
     if header.get("admin_note"):
         st.caption(f"Admin note: {header['admin_note']}")
-    
+
     with st.expander("Show technical details", expanded=False):
         st.json(header)
 
     st.markdown("### Lines")
     st.dataframe(lines, use_container_width=True, hide_index=True)
 
-    # Admin margin view
     gross_margin = float(((lines["Sell Price"] - lines["Base Price"]) * lines["Qty"]).sum())
     sell_value = float((lines["Sell Price"] * lines["Qty"]).sum())
     base_value = float((lines["Base Price"] * lines["Qty"]).sum())
     st.write({"Sell value": sell_value, "Base value": base_value, "Gross margin": gross_margin})
 
     st.markdown("### Timeline")
-    st.dataframe(actions[["action_type","action_at_utc","action_by"]], use_container_width=True, hide_index=True)
+    st.dataframe(actions[["action_type", "action_at_utc", "action_by"]], use_container_width=True, hide_index=True)
 
     st.divider()
 
-    # Actions
-    if header["status"] in ("PENDING","COUNTERED"):
+    if header["status"] in ("PENDING", "COUNTERED"):
         st.markdown("### Counter / Confirm / Reject")
 
-        admin_note = st.text_area("Admin note (optional)", value=header.get("admin_note","") or "")
+        admin_note = st.text_area("Admin note (optional)", value=header.get("admin_note", "") or "")
 
-        # Allow editing sell prices (MVP)
-        editable = lines[["line_no","Product","Location","Delivery Window","Qty","Supplier","Base Price","Sell Price"]].copy()
+        editable = lines[["line_no", "Product", "Location", "Delivery Window", "Qty", "Supplier", "Base Price", "Sell Price"]].copy()
         edited = st.data_editor(editable, use_container_width=True, hide_index=True, num_rows="fixed")
 
-        c1, c2, c3 = st.columns([1,1,1])
+        c1, c2, c3 = st.columns([1, 1, 1])
         with c1:
             if st.button("Confirm as-is", type="primary", use_container_width=True):
                 try:
@@ -624,7 +614,6 @@ def page_history():
 
     df = load_supplier_prices(sid)
 
-    # Apply margins but hide them
     margins = get_effective_margins()
     df = apply_margins(df, margins)
     df["Price"] = df["Sell Price"]
@@ -636,6 +625,7 @@ def page_history():
         df = df[df.apply(lambda r: any(ql in str(v).lower() for v in r.values), axis=1)]
 
     st.dataframe(df, use_container_width=True, hide_index=True)
+
 
 
 
