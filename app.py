@@ -1,4 +1,3 @@
-import time
 import streamlit as st
 from src.db import init_db
 from src.auth import require_login
@@ -18,30 +17,13 @@ from src.ui import (
 # MUST be first Streamlit call
 st.set_page_config(page_title="Foresight Pricing", layout="wide")
 
-# --- Splash handling (must come immediately after set_page_config) ---
-SPLASH_SECONDS = 4.8
-SPLASH_PATH = "assets/boot.mp4"
-
-if "boot_start" not in st.session_state and not st.session_state.get("booted", False):
-    st.session_state["boot_start"] = time.time()
-
-if not st.session_state.get("booted", False):
-    elapsed = time.time() - st.session_state.get("boot_start", time.time())
-    if elapsed < SPLASH_SECONDS:
-        show_boot_splash(SPLASH_PATH, seconds=SPLASH_SECONDS)  # this will st.stop()
-    else:
-        st.session_state["booted"] = True
-        st.session_state["_booting"] = False
-        st.session_state.pop("boot_start", None)
-        st.rerun()
-# --- End splash handling ---
+# Splash ONCE per session (show_boot_splash handles timing + rerun internally)
+show_boot_splash(video_path="assets/boot.mp4", seconds=4.8)
 
 init_db()
 
 if not require_login():
     st.stop()
-
-# DO NOT call show_boot_splash again here
 
 render_header()
 
@@ -66,7 +48,6 @@ with st.sidebar:
     render_presence_panel(current_page_name=choice)
 
 pages[choice]()
-
 
 
 
