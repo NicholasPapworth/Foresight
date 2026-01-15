@@ -34,31 +34,37 @@ from src.pricing import apply_margins
 
 LOGO_PATH = "assets/logo.svg"
 
-def show_boot_splash(video_path: str | None = None, seconds: float = 4.8):
+def show_boot_splash(video_path: str | None = None, seconds: float = 4.8, show_text: bool = False):
     """
     Full-screen splash once per session, displayed for `seconds`.
-    Uses time-based gating + st_autorefresh (no sleep, no JS, no iframe).
+    Time-gated + autorefresh. No iframe, no JS.
     """
-    # Already completed
-    if st.session_state.get("booted", False):
+
+    BOOTED_KEY = "booted_splash_v1"
+    START_KEY = "boot_start_splash_v1"
+
+    # Already done this session
+    if st.session_state.get(BOOTED_KEY, False):
         return
 
-    # Start time (survives Streamlit reruns)
-    if "boot_start" not in st.session_state:
-        st.session_state["boot_start"] = time.time()
+    # Start time
+    if START_KEY not in st.session_state:
+        st.session_state[START_KEY] = time.time()
 
-    elapsed = time.time() - st.session_state["boot_start"]
+    elapsed = time.time() - st.session_state[START_KEY]
+
+    # Finished → mark done, clean up, rerun to continue app normally
     if elapsed >= seconds:
-        st.session_state["booted"] = True
-        return
+        st.session_state[BOOTED_KEY] = True
+        st.session_state.pop(START_KEY, None)
+        st.rerun()
 
-    # Force periodic reruns while splash is active
+    # While active, keep rerunning so elapsed advances without sleep
     try:
         from streamlit_autorefresh import st_autorefresh
         st_autorefresh(interval=100, key="boot_splash_refresh")
     except Exception:
-        # If you don't have streamlit-autorefresh installed, install it:
-        # pip install streamlit-autorefresh
+        # If not installed: pip install streamlit-autorefresh
         pass
 
     video_tag = ""
@@ -70,11 +76,14 @@ def show_boot_splash(video_path: str | None = None, seconds: float = 4.8):
         with open(p, "rb") as f:
             b64 = base64.b64encode(f.read()).decode("utf-8")
 
+        # IMPORTANT: no "loop" so it doesn't repeat
         video_tag = f"""
-        <video class="splash-video" autoplay muted loop playsinline preload="auto">
+        <video class="splash-video" autoplay muted playsinline preload="auto">
             <source src="data:video/mp4;base64,{b64}" type="video/mp4">
         </video>
         """
+
+    text_tag = '<div class="logo">Foresight</div>' if show_text else ""
 
     st.markdown(
         f"""
@@ -113,13 +122,13 @@ def show_boot_splash(video_path: str | None = None, seconds: float = 4.8):
 
         <div class="boot-splash">
           {video_tag}
-          <div class="logo">Foresight</div>
+          {text_tag}
         </div>
         """,
         unsafe_allow_html=True
     )
 
-    # Prevent the rest of the app rendering beneath during splash
+    # Don’t render the rest of the app underneath
     st.stop()
 
 # ---------------------------
