@@ -55,6 +55,37 @@ def init_db():
     ON supplier_prices (snapshot_id, product, location, delivery_window);
     """)
 
+        # --- Seed snapshots (NEW, identical shape to supplier snapshots) ---
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS seed_snapshots (
+        snapshot_id TEXT PRIMARY KEY,
+        published_at_utc TEXT NOT NULL,
+        published_by TEXT NOT NULL,
+        source_hash TEXT NOT NULL,
+        row_count INTEGER NOT NULL
+    );
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS seed_prices (
+        snapshot_id TEXT NOT NULL,
+        supplier TEXT NOT NULL,
+        product_category TEXT,
+        product TEXT NOT NULL,
+        location TEXT NOT NULL,
+        delivery_window TEXT NOT NULL,
+        price REAL NOT NULL,
+        unit TEXT NOT NULL,
+        PRIMARY KEY (snapshot_id, supplier, product, location, delivery_window),
+        FOREIGN KEY (snapshot_id) REFERENCES seed_snapshots(snapshot_id)
+    );
+    """)
+
+    cur.execute("""
+    CREATE INDEX IF NOT EXISTS idx_seed_prices_lookup
+    ON seed_prices (snapshot_id, product, location, delivery_window);
+    """)
+
     # --- Admin margins ---
     cur.execute("""
     CREATE TABLE IF NOT EXISTS price_margins (
@@ -294,6 +325,89 @@ def publish_supplier_snapshot(df: pd.DataFrame, published_by: str, source_bytes:
     c.close()
     return snapshot_id
 
+
+# ---------------- Seed snapshots (NEW) ----------------
+
+def list_seed_snapshots(limit=200) -> pd.DataFrame:
+    c = conn()
+    df = pd.read_sql_query(f"""
+        SELECT snapshot_id, published_at_utc, published_by, row_count
+        FROM seed_snapshots
+        ORDER BY published_at_utc DESC
+        LIMIT {int(limit)}
+    """, c)
+    c.close()
+    return df
+
+
+def latest_seed_snapshot():
+    c = conn()
+    cur = c.cursor()
+    cur.execute("""
+        SELECT snapshot_id, published_at_utc, published_by
+        FROM seed_snapshots
+        ORDER BY published_at_utc DESC
+        LIMIT 1
+    """)
+    row = cur.fetchone()
+    c.close()
+    return row
+
+
+def load_seed_prices(snapshot_id: str) -> pd.DataFrame:
+    c = conn()
+    df = pd.read_sql_query("""
+        SELECT
+          supplier AS "Supplier",
+          product_category AS "Product Category",
+          product AS "Product",
+          location AS "Location",
+          delivery_window AS "Delivery Window",
+          price AS "Price",
+          unit AS "Unit"
+        FROM seed_prices
+        WHERE snapshot_id = ?
+        ORDER BY supplier, product, location, delivery_window
+    """, c, params=(snapshot_id,))
+    c.close()
+    return df
+
+def publish_seed_snapshot(df: pd.DataFrame, published_by: str, source_bytes: bytes) -> str:
+    snapshot_id = str(uuid.uuid4())
+    published_at = utc_now_iso()
+    source_hash = hashlib.sha256(source_bytes).hexdigest()
+    row_count = int(len(df))
+
+    c = conn()
+    cur = c.cursor()
+
+    cur.execute("""
+        INSERT INTO seed_snapshots (snapshot_id, published_at_utc, published_by, source_hash, row_count)
+        VALUES (?, ?, ?, ?, ?)
+    """, (snapshot_id, published_at, published_by, source_hash, row_count))
+
+    rows = []
+    for r in df.to_dict("records"):
+        rows.append((
+            snapshot_id,
+            str(r["Supplier"]).strip(),
+            str(r.get("Product Category", "")).strip(),
+            str(r["Product"]).strip(),
+            str(r.get("Location", "")).strip(),
+            str(r["Delivery Window"]).strip(),
+            float(r["Price"]),
+            str(r["Unit"]).strip(),
+        ))
+
+    cur.executemany("""
+        INSERT INTO seed_prices
+        (snapshot_id, supplier, product_category, product, location, delivery_window, price, unit)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    """, rows)
+
+    c.commit()
+    c.close()
+    return snapshot_id
 
 # ---------------- Small-lot tiers ----------------
 
@@ -944,6 +1058,7 @@ def admin_blotter_lines() -> pd.DataFrame:
     df = pd.read_sql_query(q, c)
     c.close()
     return df
+
 
 
 
