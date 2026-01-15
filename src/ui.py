@@ -34,53 +34,38 @@ from src.pricing import apply_margins
 
 LOGO_PATH = "assets/logo.svg"
 
-import base64
-from pathlib import Path
-import streamlit as st
-import streamlit.components.v1 as components
-
-def show_boot_splash(video_path: str | None = None, seconds: float = 4.8, show_text: bool = False):
+def show_boot_splash(video_path: str | None = None, seconds: float = 4.8):
     """
     Full-screen splash once per session.
-    Client-side JS removes the overlay after `seconds`.
-    Does NOT depend on reruns / streamlit-autorefresh.
+    Pure CSS hides the overlay after `seconds` (no JS, no autorefresh, no st.stop()).
     """
-    KEY = "booted_splash_v2"
+    KEY = "booted_splash_v3"  # bump version when testing so it shows again
     if st.session_state.get(KEY, False):
         return
+
+    # Mark as shown for this session
     st.session_state[KEY] = True
 
     video_tag = ""
     if video_path:
         p = Path(video_path)
         if not p.exists():
-            # if ui.py is in src/, resolve relative to project root
             p = Path(__file__).resolve().parent.parent / video_path
 
-        with open(p, "rb") as f:
-            b64 = base64.b64encode(f.read()).decode("utf-8")
+        if p.exists():
+            data = base64.b64encode(p.read_bytes()).decode("utf-8")
+            video_tag = f"""
+            <video class="splash-video" autoplay muted playsinline preload="auto">
+              <source src="data:video/mp4;base64,{data}" type="video/mp4">
+            </video>
+            """
+        else:
+            # If the file path is wrong you’d get a black screen otherwise
+            video_tag = f"<div style='color:white'>Missing video file: {p}</div>"
 
-        # no loop → do not repeat
-        video_tag = f"""
-        <video id="splashVideo" class="splash-video" autoplay muted playsinline preload="auto">
-          <source src="data:video/mp4;base64,{b64}" type="video/mp4">
-        </video>
-        """
-
-    text_tag = '<div class="splash-logo">Foresight</div>' if show_text else ""
-
-    ms = int(seconds * 1000)
-
+    # CSS-only hide after duration
     html = f"""
     <style>
-      /* Ensure the component itself never shows stray margins/scrollbars */
-      html, body {{
-        margin: 0 !important;
-        padding: 0 !important;
-        overflow: hidden !important;
-        background: transparent !important;
-      }}
-
       #boot-splash {{
         position: fixed;
         inset: 0;
@@ -89,6 +74,16 @@ def show_boot_splash(video_path: str | None = None, seconds: float = 4.8, show_t
         display: flex;
         align-items: center;
         justify-content: center;
+
+        animation: splash-hide 0s linear {seconds}s forwards;
+      }}
+
+      @keyframes splash-hide {{
+        to {{
+          opacity: 0;
+          visibility: hidden;
+          pointer-events: none;
+        }}
       }}
 
       .splash-video {{
@@ -99,47 +94,14 @@ def show_boot_splash(video_path: str | None = None, seconds: float = 4.8, show_t
         object-fit: cover;
         opacity: 0.98;
       }}
-
-      .splash-logo {{
-        position: relative;
-        font-size: 42px;
-        font-weight: 700;
-        color: #fff;
-        letter-spacing: 0.5px;
-        animation: pop 900ms ease-out forwards;
-      }}
-
-      @keyframes pop {{
-        0%   {{ transform: scale(0.85); opacity: 0; }}
-        60%  {{ transform: scale(1.02); opacity: 1; }}
-        100% {{ transform: scale(1.0); opacity: 1; }}
-      }}
     </style>
 
     <div id="boot-splash">
       {video_tag}
-      {text_tag}
     </div>
-
-    <script>
-      // Some browsers can still delay autoplay; force a play attempt.
-      try {{
-        const v = document.getElementById("splashVideo");
-        if (v) {{
-          v.play().catch(() => {{}});
-        }}
-      }} catch (e) {{}}
-
-      // Remove after the requested duration
-      setTimeout(() => {{
-        const el = document.getElementById("boot-splash");
-        if (el) el.remove();
-      }}, {ms});
-    </script>
     """
 
-    # Keep a tiny iframe; overlay is fixed so it covers the full viewport.
-    components.html(html, height=1, width=1)
+    st.markdown(html, unsafe_allow_html=True)
 
 # ---------------------------
 # Product books (Fertiliser vs Seed)
