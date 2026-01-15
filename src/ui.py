@@ -2,6 +2,7 @@ import time
 import streamlit as st
 import pandas as pd
 import uuid
+import base64
 from datetime import datetime, timezone
 from src.db import presence_heartbeat, list_online_users
 
@@ -31,6 +32,72 @@ from src.optimizer import optimise_basket
 from src.pricing import apply_margins
 
 LOGO_PATH = "assets/logo.svg"
+
+def show_boot_splash(video_path: str | None = None, seconds: float = 2.2):
+    """
+    Shows a full-screen splash overlay once per session.
+    If video_path is provided, plays it muted/looped as a background.
+    """
+    if st.session_state.get("booted", False):
+        return
+
+    st.session_state["booted"] = True  # ensure once per session
+
+    video_tag = ""
+    if video_path:
+        with open(video_path, "rb") as f:
+            b64 = base64.b64encode(f.read()).decode("utf-8")
+        video_tag = f"""
+        <video class="splash-video" autoplay muted loop playsinline>
+            <source src="data:video/mp4;base64,{b64}" type="video/mp4">
+        </video>
+        """
+
+    st.markdown(
+        f"""
+        <style>
+        .splash-overlay {{
+            position: fixed;
+            inset: 0;
+            z-index: 999999;
+            background: #000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }}
+        .splash-video {{
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            opacity: 0.95;
+        }}
+        .splash-logo {{
+            position: relative;
+            font-size: 42px;
+            font-weight: 700;
+            color: white;
+            letter-spacing: 0.5px;
+            animation: pop 900ms ease-out forwards;
+        }}
+        @keyframes pop {{
+            0%   {{ transform: scale(0.85); opacity: 0; }}
+            60%  {{ transform: scale(1.02); opacity: 1; }}
+            100% {{ transform: scale(1.0); opacity: 1; }}
+        }}
+        </style>
+
+        <div class="splash-overlay">
+            {video_tag}
+            <div class="splash-logo">Foresight</div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
+    time.sleep(seconds)
+    st.rerun()
 
 # ---------------------------
 # Product books (Fertiliser vs Seed)
@@ -82,7 +149,6 @@ def _ensure_basket_for(book_code: str):
     if bkey not in st.session_state:
         st.session_state[bkey] = []
         st.session_state[tkey] = time.time()
-
 
 def render_header():
     left, mid, right = st.columns([2, 5, 3], vertical_alignment="center")
@@ -1121,4 +1187,11 @@ def page_admin_blotter():
 
     st.markdown("### Detail")
     st.dataframe(view, use_container_width=True, hide_index=True)
+
+def run_ui():
+    # 1) Boot splash first (runs once per session due to st.session_state["booted"])
+    show_boot_splash(video_path="assets/boot.mp4", seconds=4.8)
+
+    # 2) Then your normal app can render header / navigation
+    render_header()
 
