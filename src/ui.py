@@ -48,10 +48,6 @@ def show_boot_splash(video_path: str | None = None, seconds: float = 4.8):
     if st.session_state.get("booted", False):
         return
 
-    # Hard guard: if Streamlit reruns during the sleep, don't re-enter
-    if st.session_state.get("_booting", False):
-        st.stop()
-
     st.session_state["_booting"] = True
 
     if not video_path:
