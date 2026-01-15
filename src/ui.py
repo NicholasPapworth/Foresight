@@ -5,6 +5,7 @@ import uuid
 import base64
 from datetime import datetime, timezone
 from src.db import presence_heartbeat, list_online_users
+from pathlib import Path
 
 from src.db import (
     get_settings, set_setting,
@@ -33,27 +34,36 @@ from src.pricing import apply_margins
 
 LOGO_PATH = "assets/logo.svg"
 
-def show_boot_splash(video_path: str | None = None, seconds: float = 2.2):
+def show_boot_splash(video_path: str | None = None, seconds: float = 4.8):
     """
-    Shows a full-screen splash overlay once per session.
-    If video_path is provided, plays it muted/looped as a background.
+    Full-screen splash overlay once per session.
+    IMPORTANT: No st.rerun(). Show it, sleep, then remove it.
     """
     if st.session_state.get("booted", False):
         return
 
-    st.session_state["booted"] = True  # ensure once per session
+    st.session_state["booted"] = True  # once per session
 
     video_tag = ""
     if video_path:
-        with open(video_path, "rb") as f:
+        # Make path robust (works whether cwd is project root or not)
+        p = Path(video_path)
+        if not p.exists():
+            # If ui.py is in /src, try resolving relative to project root one level up
+            p = Path(__file__).resolve().parent.parent / video_path
+
+        with open(p, "rb") as f:
             b64 = base64.b64encode(f.read()).decode("utf-8")
+
         video_tag = f"""
-        <video class="splash-video" autoplay muted loop playsinline>
+        <video class="splash-video" autoplay muted playsinline>
             <source src="data:video/mp4;base64,{b64}" type="video/mp4">
         </video>
         """
 
-    st.markdown(
+    splash = st.empty()
+
+    splash.markdown(
         f"""
         <style>
         .splash-overlay {{
@@ -97,7 +107,7 @@ def show_boot_splash(video_path: str | None = None, seconds: float = 2.2):
     )
 
     time.sleep(seconds)
-    st.rerun()
+    splash.empty()
 
 # ---------------------------
 # Product books (Fertiliser vs Seed)
@@ -1187,11 +1197,4 @@ def page_admin_blotter():
 
     st.markdown("### Detail")
     st.dataframe(view, use_container_width=True, hide_index=True)
-
-def run_ui():
-    # 1) Boot splash first (runs once per session due to st.session_state["booted"])
-    show_boot_splash(video_path="assets/boot.mp4", seconds=4.8)
-
-    # 2) Then your normal app can render header / navigation
-    render_header()
 
