@@ -2,7 +2,8 @@ import streamlit as st
 from src.db import init_db
 from src.auth import require_login
 from src.ui import (
-    run_ui,
+    show_boot_splash,   # <-- add this
+    render_header,
     render_presence_panel,
     page_trader_pricing,
     page_trader_best_prices,
@@ -19,7 +20,9 @@ init_db()
 if not require_login():
     st.stop()
 
-run_ui()
+show_boot_splash(video_path="assets/boot.mp4", seconds=4.8)
+
+render_header()
 
 pages = {
     "Trader | Pricing": page_trader_pricing,
