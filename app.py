@@ -2,7 +2,7 @@ import streamlit as st
 from src.db import init_db
 from src.auth import require_login
 from src.ui import (
-    render_header,
+    run_ui,
     render_presence_panel,
     page_trader_pricing,
     page_trader_best_prices,
@@ -19,7 +19,7 @@ init_db()
 if not require_login():
     st.stop()
 
-render_header()
+run_ui()
 
 pages = {
     "Trader | Pricing": page_trader_pricing,
