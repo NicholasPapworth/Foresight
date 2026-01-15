@@ -14,6 +14,21 @@ from src.ui import (
     page_history,
 )
 
+# --- Splash handling (top of app.py) ---
+if "boot_start" not in st.session_state and not st.session_state.get("booted", False):
+    st.session_state["boot_start"] = time.time()
+
+if not st.session_state.get("booted", False):
+    elapsed = time.time() - st.session_state.get("boot_start", time.time())
+    if elapsed < 4.8:
+        show_boot_splash("assets/foresight_intro.mp4", seconds=4.8)
+    else:
+        st.session_state["booted"] = True
+        st.session_state["_booting"] = False
+        st.session_state.pop("boot_start", None)
+        st.rerun()
+# --- End splash handling ---
+
 st.set_page_config(page_title="Foresight Pricing", layout="wide")
 init_db()
 
