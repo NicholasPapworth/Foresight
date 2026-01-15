@@ -3,7 +3,6 @@ import streamlit as st
 import pandas as pd
 import uuid
 import base64
-import streamlit.components.v1 as components
 from pathlib import Path
 from datetime import datetime, timezone
 from src.db import presence_heartbeat, list_online_users
@@ -37,90 +36,91 @@ LOGO_PATH = "assets/logo.svg"
 
 def show_boot_splash(video_path: str | None = None, seconds: float = 4.8):
     """
-    Full-screen splash once per session.
-    Uses client-side JS to remove itself after `seconds`.
-    No sleep. No rerun. Survives Streamlit startup reruns.
+    Full-screen splash once per session, displayed for `seconds`.
+    Uses time-based gating + st_autorefresh (no sleep, no JS, no iframe).
     """
+    # Already completed
     if st.session_state.get("booted", False):
         return
 
-    st.session_state["booted"] = True  # show only once per session
+    # Start time (survives Streamlit reruns)
+    if "boot_start" not in st.session_state:
+        st.session_state["boot_start"] = time.time()
+
+    elapsed = time.time() - st.session_state["boot_start"]
+    if elapsed >= seconds:
+        st.session_state["booted"] = True
+        return
+
+    # Force periodic reruns while splash is active
+    try:
+        from streamlit_autorefresh import st_autorefresh
+        st_autorefresh(interval=100, key="boot_splash_refresh")
+    except Exception:
+        # If you don't have streamlit-autorefresh installed, install it:
+        # pip install streamlit-autorefresh
+        pass
 
     video_tag = ""
     if video_path:
         p = Path(video_path)
         if not p.exists():
-            # if ui.py is in src/, resolve relative to project root
             p = Path(__file__).resolve().parent.parent / video_path
 
         with open(p, "rb") as f:
             b64 = base64.b64encode(f.read()).decode("utf-8")
 
         video_tag = f"""
-        <video class="splash-video" autoplay muted playsinline>
+        <video class="splash-video" autoplay muted loop playsinline preload="auto">
             <source src="data:video/mp4;base64,{b64}" type="video/mp4">
         </video>
         """
 
-    ms = int(seconds * 1000)
+    st.markdown(
+        f"""
+        <style>
+          .boot-splash {{
+            position: fixed;
+            inset: 0;
+            z-index: 999999;
+            background: #000;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+          }}
+          .boot-splash video {{
+            position: absolute;
+            inset: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+            opacity: 0.95;
+          }}
+          .boot-splash .logo {{
+            position: relative;
+            font-size: 42px;
+            font-weight: 700;
+            color: #fff;
+            letter-spacing: 0.5px;
+            animation: pop 900ms ease-out forwards;
+          }}
+          @keyframes pop {{
+            0%   {{ transform: scale(0.85); opacity: 0; }}
+            60%  {{ transform: scale(1.02); opacity: 1; }}
+            100% {{ transform: scale(1.0); opacity: 1; }}
+          }}
+        </style>
 
-    html = f"""
-    <style>
-      .splash-overlay {{
-        position: fixed;
-        inset: 0;
-        z-index: 2147483647;
-        background: #000;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-      }}
-      .splash-video {{
-        position: absolute;
-        inset: 0;
-        width: 100%;
-        height: 100%;
-        object-fit: cover;
-        opacity: 0.95;
-      }}
-      .splash-logo {{
-        position: relative;
-        font-size: 42px;
-        font-weight: 700;
-        color: white;
-        letter-spacing: 0.5px;
-        animation: pop 900ms ease-out forwards;
-      }}
-      @keyframes pop {{
-        0%   {{ transform: scale(0.85); opacity: 0; }}
-        60%  {{ transform: scale(1.02); opacity: 1; }}
-        100% {{ transform: scale(1.0); opacity: 1; }}
-      }}
-    
-      /* Hide the Streamlit component box itself */
-      html, body {{
-        margin: 0;
-        padding: 0;
-        overflow: hidden;
-        background: transparent;
-      }}
-    </style>
-    
-    <div id="boot-splash" class="splash-overlay">
-      {video_tag}
-      <div class="splash-logo">Foresight</div>
-    </div>
-    
-    <script>
-      setTimeout(() => {{
-        const el = document.getElementById("boot-splash");
-        if (el) el.remove();
-      }}, {ms});
-    </script>
-    """
+        <div class="boot-splash">
+          {video_tag}
+          <div class="logo">Foresight</div>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
 
-    # height=0 is fine because overlay is position:fixed
-    components.html(html, height=1, width=1)
+    # Prevent the rest of the app rendering beneath during splash
+    st.stop()
 
 # ---------------------------
 # Product books (Fertiliser vs Seed)
