@@ -34,74 +34,74 @@ from src.pricing import apply_margins
 
 LOGO_PATH = "assets/logo.svg"
 
+import time
+from pathlib import Path
+import streamlit as st
+
 def show_boot_splash(video_path: str | None = None, seconds: float = 4.8):
     """
-    Full-screen splash once per session.
-    Pure CSS hides the overlay after `seconds` (no JS, no autorefresh, no st.stop()).
+    Full-screen splash video ONCE per session.
+    Reliable approach: st.video + temporary fullscreen CSS + short sleep.
     """
-    KEY = "booted_splash_v3"  # bump version when testing so it shows again
-    if st.session_state.get(KEY, False):
+    if st.session_state.get("booted", False):
         return
 
-    # Mark as shown for this session
-    st.session_state[KEY] = True
+    # Mark as done BEFORE sleeping to avoid replay on reruns
+    st.session_state["booted"] = True
 
-    video_tag = ""
-    if video_path:
-        p = Path(video_path)
-        if not p.exists():
-            p = Path(__file__).resolve().parent.parent / video_path
+    if not video_path:
+        return
 
-        if p.exists():
-            data = base64.b64encode(p.read_bytes()).decode("utf-8")
-            video_tag = f"""
-            <video class="splash-video" autoplay muted playsinline preload="auto">
-              <source src="data:video/mp4;base64,{data}" type="video/mp4">
-            </video>
-            """
-        else:
-            # If the file path is wrong you’d get a black screen otherwise
-            video_tag = f"<div style='color:white'>Missing video file: {p}</div>"
+    p = Path(video_path)
+    if not p.exists():
+        # if ui.py is in src/, resolve relative to project root
+        p = Path(__file__).resolve().parent.parent / video_path
 
-    # CSS-only hide after duration
-    html = f"""
-    <style>
-      #boot-splash {{
-        position: fixed;
-        inset: 0;
-        z-index: 2147483647;
-        background: #000;
-        display: flex;
-        align-items: center;
-        justify-content: center;
+    if not p.exists():
+        st.error(f"Splash video not found: {p}")
+        return
 
-        animation: splash-hide 0s linear {seconds}s forwards;
-      }}
+    holder = st.empty()
 
-      @keyframes splash-hide {{
-        to {{
-          opacity: 0;
-          visibility: hidden;
-          pointer-events: none;
-        }}
-      }}
+    # Fullscreen the Streamlit st.video element while splash is shown
+    holder.markdown(
+        """
+        <style>
+          /* Hide Streamlit chrome while splash is active */
+          header {visibility: hidden;}
+          footer {visibility: hidden;}
+          [data-testid="stSidebar"] {visibility: hidden;}
 
-      .splash-video {{
-        position: absolute;
-        inset: 0;
-        width: 100%;
-        height: 100%;
-        object-fit: cover;
-        opacity: 0.98;
-      }}
-    </style>
+          /* Make the st.video container fullscreen */
+          div[data-testid="stVideo"] {
+            position: fixed !important;
+            inset: 0 !important;
+            width: 100vw !important;
+            height: 100vh !important;
+            z-index: 2147483647 !important;
+            background: #000 !important;
+            margin: 0 !important;
+            padding: 0 !important;
+          }
 
-    <div id="boot-splash">
-      {video_tag}
-    </div>
-    """
+          /* Make the <video> fill the screen */
+          div[data-testid="stVideo"] video {
+            width: 100% !important;
+            height: 100% !important;
+            object-fit: cover !important;
+          }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
-    st.markdown(html, unsafe_allow_html=True)
+    # Streamlit-served video (do NOT base64-embed)
+    holder.video(str(p), start_time=0)
+
+    # Hold splash for desired duration, then remove and rerun into the app
+    time.sleep(seconds)
+    holder.empty()
+    st.rerun()
 
 # ---------------------------
 # Product books (Fertiliser vs Seed)
