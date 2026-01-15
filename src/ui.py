@@ -7,7 +7,6 @@ import streamlit.components.v1 as components
 from pathlib import Path
 from datetime import datetime, timezone
 from src.db import presence_heartbeat, list_online_users
-from pathlib import Path
 
 from src.db import (
     get_settings, set_setting,
@@ -97,15 +96,22 @@ def show_boot_splash(video_path: str | None = None, seconds: float = 4.8):
         60%  {{ transform: scale(1.02); opacity: 1; }}
         100% {{ transform: scale(1.0); opacity: 1; }}
       }}
+    
+      /* Hide the Streamlit component box itself */
+      html, body {{
+        margin: 0;
+        padding: 0;
+        overflow: hidden;
+        background: transparent;
+      }}
     </style>
-
+    
     <div id="boot-splash" class="splash-overlay">
       {video_tag}
       <div class="splash-logo">Foresight</div>
     </div>
-
+    
     <script>
-      // remove after duration
       setTimeout(() => {{
         const el = document.getElementById("boot-splash");
         if (el) el.remove();
@@ -114,7 +120,7 @@ def show_boot_splash(video_path: str | None = None, seconds: float = 4.8):
     """
 
     # height=0 is fine because overlay is position:fixed
-    components.html(html, height=0, width=0)
+    components.html(html, height=1, width=1)
 
 # ---------------------------
 # Product books (Fertiliser vs Seed)
