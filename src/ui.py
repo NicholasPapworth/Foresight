@@ -3,6 +3,8 @@ import streamlit as st
 import pandas as pd
 import uuid
 import base64
+import streamlit.components.v1 as components
+from pathlib import Path
 from datetime import datetime, timezone
 from src.db import presence_heartbeat, list_online_users
 from pathlib import Path
@@ -36,20 +38,20 @@ LOGO_PATH = "assets/logo.svg"
 
 def show_boot_splash(video_path: str | None = None, seconds: float = 4.8):
     """
-    Full-screen splash overlay once per session.
-    IMPORTANT: No st.rerun(). Show it, sleep, then remove it.
+    Full-screen splash once per session.
+    Uses client-side JS to remove itself after `seconds`.
+    No sleep. No rerun. Survives Streamlit startup reruns.
     """
     if st.session_state.get("booted", False):
         return
 
-    st.session_state["booted"] = True  # once per session
+    st.session_state["booted"] = True  # show only once per session
 
     video_tag = ""
     if video_path:
-        # Make path robust (works whether cwd is project root or not)
         p = Path(video_path)
         if not p.exists():
-            # If ui.py is in /src, try resolving relative to project root one level up
+            # if ui.py is in src/, resolve relative to project root
             p = Path(__file__).resolve().parent.parent / video_path
 
         with open(p, "rb") as f:
@@ -61,53 +63,58 @@ def show_boot_splash(video_path: str | None = None, seconds: float = 4.8):
         </video>
         """
 
-    splash = st.empty()
+    ms = int(seconds * 1000)
 
-    splash.markdown(
-        f"""
-        <style>
-        .splash-overlay {{
-            position: fixed;
-            inset: 0;
-            z-index: 999999;
-            background: #000;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-        }}
-        .splash-video {{
-            position: absolute;
-            inset: 0;
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
-            opacity: 0.95;
-        }}
-        .splash-logo {{
-            position: relative;
-            font-size: 42px;
-            font-weight: 700;
-            color: white;
-            letter-spacing: 0.5px;
-            animation: pop 900ms ease-out forwards;
-        }}
-        @keyframes pop {{
-            0%   {{ transform: scale(0.85); opacity: 0; }}
-            60%  {{ transform: scale(1.02); opacity: 1; }}
-            100% {{ transform: scale(1.0); opacity: 1; }}
-        }}
-        </style>
+    html = f"""
+    <style>
+      .splash-overlay {{
+        position: fixed;
+        inset: 0;
+        z-index: 2147483647;
+        background: #000;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }}
+      .splash-video {{
+        position: absolute;
+        inset: 0;
+        width: 100%;
+        height: 100%;
+        object-fit: cover;
+        opacity: 0.95;
+      }}
+      .splash-logo {{
+        position: relative;
+        font-size: 42px;
+        font-weight: 700;
+        color: white;
+        letter-spacing: 0.5px;
+        animation: pop 900ms ease-out forwards;
+      }}
+      @keyframes pop {{
+        0%   {{ transform: scale(0.85); opacity: 0; }}
+        60%  {{ transform: scale(1.02); opacity: 1; }}
+        100% {{ transform: scale(1.0); opacity: 1; }}
+      }}
+    </style>
 
-        <div class="splash-overlay">
-            {video_tag}
-            <div class="splash-logo">Foresight</div>
-        </div>
-        """,
-        unsafe_allow_html=True
-    )
+    <div id="boot-splash" class="splash-overlay">
+      {video_tag}
+      <div class="splash-logo">Foresight</div>
+    </div>
 
-    time.sleep(seconds)
-    splash.empty()
+    <script>
+      // remove after duration
+      setTimeout(() => {{
+        const el = document.getElementById("boot-splash");
+        if (el) el.remove();
+      }}, {ms});
+    </script>
+    """
+
+    # height=0 is fine because overlay is position:fixed
+    components.html(html, height=0, width=0)
 
 # ---------------------------
 # Product books (Fertiliser vs Seed)
