@@ -42,63 +42,43 @@ import streamlit as st
 
 def show_boot_splash(video_path: str | None = None, seconds: float = 4.8):
     """
-    Full-screen splash video ONCE per session.
-    Autoplay, no controls, full screen, shows for `seconds`, then disappears.
-    Uses time gating + st_autorefresh (no sleep, no component iframe).
+    Full-screen splash ONCE per session.
+    Autoplay, no controls, NOT looping, full screen for `seconds`, then disappears.
     """
     if st.session_state.get("booted", False):
         return
+    if st.session_state.get("_booting", False):
+        st.stop()
+
+    st.session_state["_booting"] = True
 
     if not video_path:
         st.session_state["booted"] = True
+        st.session_state["_booting"] = False
         return
 
-    # Start time once
-    if "boot_start" not in st.session_state:
-        st.session_state["boot_start"] = time.time()
-
-    # Resolve path
     p = Path(video_path)
     if not p.exists():
         p = Path(__file__).resolve().parent.parent / video_path
-
     if not p.exists():
         st.session_state["booted"] = True
+        st.session_state["_booting"] = False
         st.error(f"Splash video not found: {p}")
         return
 
-    # Cache base64 once (critical: removes blank delay)
+    # Cache base64 once (prevents blank delay on reruns)
     if "boot_b64" not in st.session_state:
         st.session_state["boot_b64"] = base64.b64encode(p.read_bytes()).decode("utf-8")
-
-    elapsed = time.time() - st.session_state["boot_start"]
-
-    # End splash
-    if elapsed >= seconds:
-        st.session_state["booted"] = True
-        st.session_state.pop("boot_start", None)
-        st.session_state.pop("boot_b64", None)
-        st.rerun()
-
-    # Force reruns while splash is active (install: pip install streamlit-autorefresh)
-    try:
-        from streamlit_autorefresh import st_autorefresh
-        st_autorefresh(interval=100, key="boot_splash_refresh")
-    except Exception:
-        # Fallback (works, but less smooth): still stop rendering the rest
-        pass
 
     b64 = st.session_state["boot_b64"]
 
     st.markdown(
         f"""
         <style>
-          /* Hide Streamlit chrome during splash */
           header, footer {{ visibility: hidden; }}
           [data-testid="stSidebar"] {{ display: none; }}
           .block-container {{ padding-top: 0rem; }}
 
-          /* Fullscreen overlay */
           #boot-splash {{
             position: fixed;
             inset: 0;
@@ -106,7 +86,6 @@ def show_boot_splash(video_path: str | None = None, seconds: float = 4.8):
             background: #000;
             overflow: hidden;
           }}
-
           #boot-splash video {{
             position: absolute;
             inset: 0;
@@ -121,7 +100,6 @@ def show_boot_splash(video_path: str | None = None, seconds: float = 4.8):
                  autoplay
                  muted
                  playsinline
-                 loop
                  preload="auto">
             <source src="data:video/mp4;base64,{b64}" type="video/mp4" />
           </video>
@@ -131,8 +109,7 @@ def show_boot_splash(video_path: str | None = None, seconds: float = 4.8):
           (function() {{
             const v = document.getElementById("bootVid");
             if (!v) return;
-
-            // Hard autoplay (Chrome sometimes needs explicit play() even when muted)
+            v.controls = false;
             const tryPlay = () => {{
               try {{
                 const p = v.play();
@@ -142,15 +119,19 @@ def show_boot_splash(video_path: str | None = None, seconds: float = 4.8):
             v.addEventListener("canplay", tryPlay);
             v.addEventListener("loadeddata", tryPlay);
             tryPlay();
-
-            // Ensure no controls are shown (belt & braces)
-            v.controls = false;
           }})();
         </script>
         """,
         unsafe_allow_html=True
     )
-    st.stop()
+
+    # Hold the server run so the DOM isn't rebuilt (prevents "looping" via reruns)
+    time.sleep(seconds)
+
+    st.session_state["booted"] = True
+    st.session_state["_booting"] = False
+    st.session_state.pop("boot_b64", None)
+    st.rerun()
 
 # ---------------------------
 # Product books (Fertiliser vs Seed)
