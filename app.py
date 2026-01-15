@@ -1,3 +1,4 @@
+import time
 import streamlit as st
 from src.db import init_db
 from src.auth import require_login
@@ -14,14 +15,20 @@ from src.ui import (
     page_history,
 )
 
-# --- Splash handling (top of app.py) ---
+# MUST be first Streamlit call
+st.set_page_config(page_title="Foresight Pricing", layout="wide")
+
+# --- Splash handling (must come immediately after set_page_config) ---
+SPLASH_SECONDS = 4.8
+SPLASH_PATH = "assets/foresight_intro.mp4"
+
 if "boot_start" not in st.session_state and not st.session_state.get("booted", False):
     st.session_state["boot_start"] = time.time()
 
 if not st.session_state.get("booted", False):
     elapsed = time.time() - st.session_state.get("boot_start", time.time())
-    if elapsed < 4.8:
-        show_boot_splash("assets/foresight_intro.mp4", seconds=4.8)
+    if elapsed < SPLASH_SECONDS:
+        show_boot_splash(SPLASH_PATH, seconds=SPLASH_SECONDS)  # this will st.stop()
     else:
         st.session_state["booted"] = True
         st.session_state["_booting"] = False
@@ -29,13 +36,12 @@ if not st.session_state.get("booted", False):
         st.rerun()
 # --- End splash handling ---
 
-st.set_page_config(page_title="Foresight Pricing", layout="wide")
 init_db()
 
 if not require_login():
     st.stop()
 
-show_boot_splash(video_path="assets/boot.mp4", seconds=4.8)
+# DO NOT call show_boot_splash again here
 
 render_header()
 
@@ -56,12 +62,10 @@ if st.session_state.get("role") == "admin":
 with st.sidebar:
     st.markdown("### Navigation")
     choice = st.radio("", list(pages.keys()), key="nav_choice")
-
     st.divider()
-    render_presence_panel(current_page_name=choice)  # explicit kwarg is clearer
+    render_presence_panel(current_page_name=choice)
 
 pages[choice]()
-
 
 
 
