@@ -8,8 +8,15 @@ from src.db import presence_heartbeat, list_online_users
 from src.db import (
     get_settings, set_setting,
     get_small_lot_tiers, save_small_lot_tiers,
+
+    # Fertiliser snapshot functions (existing)
     latest_supplier_snapshot, list_supplier_snapshots,
     load_supplier_prices, publish_supplier_snapshot,
+
+    # Seed snapshot functions (you will add in db.py later)
+    latest_seed_snapshot, list_seed_snapshots,
+    load_seed_prices, publish_seed_snapshot,
+
     add_margin, list_margins, deactivate_margin, get_effective_margins,
     create_order_from_allocation, list_orders_for_user, list_orders_admin,
     get_order_header, get_order_lines, get_order_actions,
@@ -18,11 +25,61 @@ from src.db import (
     admin_blotter_lines,
     admin_margin_report
 )
+
 from src.validation import load_supplier_sheet
 from src.optimizer import optimise_basket
 from src.pricing import apply_margins
 
 LOGO_PATH = "assets/logo.svg"
+
+# ---------------------------
+# Product books (Fertiliser vs Seed)
+# ---------------------------
+
+BOOKS = {
+    "Fertiliser": {
+        "code": "fert",
+        "latest_snapshot": latest_supplier_snapshot,
+        "list_snapshots": list_supplier_snapshots,
+        "load_prices": load_supplier_prices,
+        "publish_snapshot": publish_supplier_snapshot,
+        "upload_label": "Upload supplier prices (FERTILISER)",
+    },
+    "Seed": {
+        "code": "seed",
+        "latest_snapshot": latest_seed_snapshot,
+        "list_snapshots": list_seed_snapshots,
+        "load_prices": load_seed_prices,
+        "publish_snapshot": publish_seed_snapshot,
+        "upload_label": "Upload supplier prices (SEED)",
+    },
+}
+
+
+def _ss_key(book_code: str, name: str) -> str:
+    """Namespaced session_state key so Fert and Seed don't clash."""
+    return f"{book_code}__{name}"
+
+
+def _get_latest_prices_df_for(book_code: str):
+    snap = BOOKS_BY_CODE[book_code]["latest_snapshot"]()
+    if not snap:
+        return None, None
+    sid, ts, by = snap
+    df = BOOKS_BY_CODE[book_code]["load_prices"](sid)
+    return sid, df
+
+
+def _ensure_basket_for(book_code: str):
+    bkey = _ss_key(book_code, "basket")
+    tkey = _ss_key(book_code, "basket_created_at")
+    if bkey not in st.session_state:
+        st.session_state[bkey] = []
+        st.session_state[tkey] = time.time()
+
+
+# Build reverse lookup once
+BOOKS_BY_CODE = {v["code"]: v for v in BOOKS.values()}
 
 
 def render_header():
@@ -92,7 +149,16 @@ def _best_prices_board(df: pd.DataFrame) -> pd.DataFrame:
 def page_trader_pricing():
     st.subheader("Trader | Pricing")
 
-    sid, df = _get_latest_prices_df()
+    tab_f, tab_s = st.tabs(["Fertiliser", "Seed"])
+
+    with tab_f:
+        _page_trader_pricing_impl(book_code="fert")
+
+    with tab_s:
+        _page_trader_pricing_impl(book_code="seed")
+
+def _page_trader_pricing_impl(book_code: str):
+    sid, df = _get_latest_prices_df_for(book_code)
     if df is None:
         st.warning("No supplier snapshot available. Admin must publish one.")
         return
@@ -105,32 +171,54 @@ def page_trader_pricing():
     margins = get_effective_margins()
     df = apply_margins(df, margins)
 
+    # Namespaced session keys
+    basket_key = _ss_key(book_code, "basket")
+    basket_created_key = _ss_key(book_code, "basket_created_at")
+    last_optim_key = _ss_key(book_code, "last_optim_result")
+    last_optim_snap_key = _ss_key(book_code, "last_optim_snapshot")
+
     # Basket state
-    if "basket" not in st.session_state:
-        st.session_state.basket = []
-        st.session_state.basket_created_at = time.time()
+    _ensure_basket_for(book_code)
 
     # Expiry
-    age_sec = time.time() - st.session_state.basket_created_at
+    age_sec = time.time() - st.session_state[basket_created_key]
     if age_sec > timeout_min * 60:
-        st.session_state.basket = []
-        st.session_state.basket_created_at = time.time()
+        st.session_state[basket_key] = []
+        st.session_state[basket_created_key] = time.time()
         st.info("Basket expired and has been cleared.")
 
     st.caption(f"Using supplier snapshot: {sid[:8]} | Basket timeout: {timeout_min} min")
 
     c1, c2, c3, c4 = st.columns([3, 2, 2, 2])
     with c1:
-        product = st.selectbox("Product", sorted(df["Product"].dropna().unique().tolist()))
+        product = st.selectbox(
+            "Product",
+            sorted(df["Product"].dropna().unique().tolist()),
+            key=_ss_key(book_code, "pricing_product")
+        )
     with c2:
-        location = st.selectbox("Location", sorted(df["Location"].dropna().unique().tolist()))
+        location = st.selectbox(
+            "Location",
+            sorted(df["Location"].dropna().unique().tolist()),
+            key=_ss_key(book_code, "pricing_location")
+        )
     with c3:
-        window = st.selectbox("Delivery Window", sorted(df["Delivery Window"].dropna().unique().tolist()))
+        window = st.selectbox(
+            "Delivery Window",
+            sorted(df["Delivery Window"].dropna().unique().tolist()),
+            key=_ss_key(book_code, "pricing_window")
+        )
     with c4:
-        qty = st.number_input("Qty (t)", min_value=0.0, value=10.0, step=1.0)
+        qty = st.number_input(
+            "Qty (t)",
+            min_value=0.0,
+            value=10.0,
+            step=1.0,
+            key=_ss_key(book_code, "pricing_qty")
+        )
 
-    if st.button("Add to basket", use_container_width=True):
-        st.session_state.basket.append({
+    if st.button("Add to basket", use_container_width=True, key=_ss_key(book_code, "btn_add_to_basket")):
+        st.session_state[basket_key].append({
             "Product": product,
             "Location": location,
             "Delivery Window": window,
@@ -141,29 +229,30 @@ def page_trader_pricing():
     st.divider()
 
     # Basket view
-    if not st.session_state.basket:
+    if not st.session_state[basket_key]:
         st.info("Basket is empty.")
         return
 
-    bdf = pd.DataFrame(st.session_state.basket)
+    bdf = pd.DataFrame(st.session_state[basket_key])
     st.markdown("### Basket")
     st.dataframe(bdf, use_container_width=True, hide_index=True)
 
     colA, colB = st.columns([1, 1])
     with colA:
-        if st.button("Clear basket", use_container_width=True):
-            st.session_state.basket = []
-            st.session_state.basket_created_at = time.time()
+        if st.button("Clear basket", use_container_width=True, key=_ss_key(book_code, "btn_clear_basket")):
+            st.session_state[basket_key] = []
+            st.session_state[basket_created_key] = time.time()
             st.rerun()
+
     with colB:
-        if st.button("Optimise", type="primary", use_container_width=True):
+        if st.button("Optimise", type="primary", use_container_width=True, key=_ss_key(book_code, "btn_optimise")):
             sell_prices = df[["Supplier", "Product", "Location", "Delivery Window", "Sell Price"]].rename(
                 columns={"Sell Price": "Price"}
             )
 
             res = optimise_basket(
                 supplier_prices=sell_prices,
-                basket=st.session_state.basket,
+                basket=st.session_state[basket_key],
                 tiers=tiers
             )
 
@@ -171,17 +260,17 @@ def page_trader_pricing():
                 st.error(res.get("error", "Unknown error"))
                 return
 
-            st.session_state.last_optim_result = res
-            st.session_state.last_optim_snapshot = sid
+            st.session_state[last_optim_key] = res
+            st.session_state[last_optim_snap_key] = sid
             st.success("Optimisation complete. Review below.")
             st.rerun()
 
     # Show optimisation result if available
-    if "last_optim_result" not in st.session_state or st.session_state.get("last_optim_snapshot") != sid:
+    if last_optim_key not in st.session_state or st.session_state.get(last_optim_snap_key) != sid:
         st.info("Optimise to generate an allocation before checkout.")
         return
 
-    res = st.session_state.last_optim_result
+    res = st.session_state[last_optim_key]
 
     st.markdown("### Optimal allocation (Sell prices)")
     alloc_df = pd.DataFrame(res["allocation"])
@@ -200,9 +289,13 @@ def page_trader_pricing():
     st.divider()
     st.markdown("### Checkout")
 
-    trader_note = st.text_area("Order note (optional)", placeholder="Customer/account, terms, anything relevant.")
+    trader_note = st.text_area(
+        "Order note (optional)",
+        placeholder="Customer/account, terms, anything relevant.",
+        key=_ss_key(book_code, "trader_note")
+    )
 
-    if st.button("Submit order to Admin", type="primary", use_container_width=True):
+    if st.button("Submit order to Admin", type="primary", use_container_width=True, key=_ss_key(book_code, "btn_submit")):
         alloc_lines = []
         for r in res["allocation"]:
             prod = r["Product"]
@@ -251,15 +344,15 @@ def page_trader_pricing():
                 allocation_lines=alloc_lines,
                 trader_note=trader_note
             )
-            st.session_state.basket = []
-            st.session_state.basket_created_at = time.time()
-            st.session_state.last_optim_result = None
-            st.session_state.last_optim_snapshot = None
+
+            st.session_state[basket_key] = []
+            st.session_state[basket_created_key] = time.time()
+            st.session_state[last_optim_key] = None
+            st.session_state[last_optim_snap_key] = None
 
             st.success(f"Order submitted: {order_id[:8]}")
         except Exception as e:
             st.error(str(e))
-
 
 def page_trader_orders():
     st.subheader("Trader | Orders")
@@ -343,13 +436,21 @@ def page_admin_pricing():
 
     st.subheader("Admin | Pricing")
 
+    tab_f, tab_s = st.tabs(["Fertiliser", "Seed"])
+    with tab_f:
+        _page_admin_pricing_impl(book_code="fert")
+    with tab_s:
+        _page_admin_pricing_impl(book_code="seed")
+
+def _page_admin_pricing_impl(book_code: str):
     settings = get_settings()
     timeout = st.number_input(
         "Basket timeout (minutes)",
         min_value=1,
-        value=int(settings.get("basket_timeout_minutes", "20"))
+        value=int(settings.get("basket_timeout_minutes", "20")),
+        key=_ss_key(book_code, "admin_timeout")
     )
-    if st.button("Save settings", use_container_width=True):
+    if st.button("Save settings", use_container_width=True, key=_ss_key(book_code, "btn_save_settings")):
         set_setting("basket_timeout_minutes", str(timeout))
         st.success("Settings saved.")
 
@@ -367,6 +468,7 @@ def page_admin_pricing():
         num_rows="dynamic",
         use_container_width=True,
         hide_index=True,
+        key=_ss_key(book_code, "tiers_editor"),
         column_config={
             "min_t": st.column_config.NumberColumn("Min t", min_value=0.0, step=0.1),
             "max_t": st.column_config.NumberColumn("Max t", min_value=0.0, step=0.1),
@@ -375,7 +477,7 @@ def page_admin_pricing():
         }
     )
 
-    if st.button("Save tiers", type="primary", use_container_width=True):
+    if st.button("Save tiers", type="primary", use_container_width=True, key=_ss_key(book_code, "btn_save_tiers")):
         try:
             edited2 = edited.copy()
             if "active" not in edited2.columns:
@@ -401,8 +503,8 @@ def page_admin_pricing():
         show = show.rename(columns={"margin_per_t": "Margin (£/t)"})
         st.dataframe(show, use_container_width=True, hide_index=True)
 
-        mid = st.number_input("Deactivate margin_id", min_value=0, value=0, step=1)
-        if st.button("Deactivate selected margin", use_container_width=True):
+        mid = st.number_input("Deactivate margin_id", min_value=0, value=0, step=1, key=_ss_key(book_code, "deact_mid"))
+        if st.button("Deactivate selected margin", use_container_width=True, key=_ss_key(book_code, "btn_deact")):
             if mid <= 0:
                 st.error("Enter a valid margin_id.")
             else:
@@ -411,10 +513,10 @@ def page_admin_pricing():
                 st.rerun()
 
     st.markdown("#### Add new margin")
-    scope_type = st.selectbox("Scope", ["category", "product"])
-    scope_value = st.text_input("Category/Product name (exact match)")
-    margin_per_t = st.number_input("Margin (£/t)", value=0.0, step=0.5)
-    if st.button("Add margin", type="primary", use_container_width=True):
+    scope_type = st.selectbox("Scope", ["category", "product"], key=_ss_key(book_code, "margin_scope_type"))
+    scope_value = st.text_input("Category/Product name (exact match)", key=_ss_key(book_code, "margin_scope_value"))
+    margin_per_t = st.number_input("Margin (£/t)", value=0.0, step=0.5, key=_ss_key(book_code, "margin_per_t"))
+    if st.button("Add margin", type="primary", use_container_width=True, key=_ss_key(book_code, "btn_add_margin")):
         try:
             add_margin(scope_type, scope_value, float(margin_per_t), st.session_state.get("user", "unknown"))
             st.success("Margin added.")
@@ -424,21 +526,21 @@ def page_admin_pricing():
 
     st.divider()
 
-    st.markdown("### Upload supplier prices (SUPPLIER_PRICES)")
-    up = st.file_uploader("Upload Excel", type=["xlsx"])
+    st.markdown(f"### {BOOKS_BY_CODE[book_code]['upload_label']}")
+    up = st.file_uploader("Upload Excel", type=["xlsx"], key=_ss_key(book_code, "upload_excel"))
     if up:
         content = up.read()
         try:
             df = load_supplier_sheet(content)
             st.success("Validated. Preview:")
             st.dataframe(df, use_container_width=True, hide_index=True)
-            if st.button("Publish supplier snapshot", type="primary", use_container_width=True):
-                sid = publish_supplier_snapshot(df, st.session_state.get("user", "unknown"), content)
+
+            if st.button("Publish supplier snapshot", type="primary", use_container_width=True, key=_ss_key(book_code, "btn_publish")):
+                sid = BOOKS_BY_CODE[book_code]["publish_snapshot"](df, st.session_state.get("user", "unknown"), content)
                 st.success(f"Published supplier snapshot: {sid}")
                 st.rerun()
         except Exception as e:
             st.error(str(e))
-
 
 def page_admin_orders():
     if st.session_state.get("role") != "admin":
@@ -590,24 +692,31 @@ def page_admin_orders():
 def page_history():
     st.subheader("History")
 
-    snaps = list_supplier_snapshots()
+    tab_f, tab_s = st.tabs(["Fertiliser", "Seed"])
+    with tab_f:
+        _page_history_impl(book_code="fert")
+    with tab_s:
+        _page_history_impl(book_code="seed")
+
+def _page_history_impl(book_code: str):
+    snaps = BOOKS_BY_CODE[book_code]["list_snapshots"]()
     if snaps.empty:
         st.info("No snapshots yet.")
         return
 
     snaps = snaps.copy()
     snaps["label"] = snaps["published_at_utc"] + " | " + snaps["published_by"] + " | " + snaps["snapshot_id"].str[:8]
-    label = st.selectbox("Select snapshot", snaps["label"].tolist())
+    label = st.selectbox("Select snapshot", snaps["label"].tolist(), key=_ss_key(book_code, "hist_select"))
     sid = snaps.loc[snaps["label"] == label, "snapshot_id"].iloc[0]
 
-    df = load_supplier_prices(sid)
+    df = BOOKS_BY_CODE[book_code]["load_prices"](sid)
 
     margins = get_effective_margins()
     df = apply_margins(df, margins)
     df["Price"] = df["Sell Price"]
     df = df.drop(columns=["Sell Price"], errors="ignore")
 
-    q = st.text_input("Search")
+    q = st.text_input("Search", key=_ss_key(book_code, "hist_search"))
     if q:
         ql = q.lower()
         df = df[df.apply(lambda r: any(ql in str(v).lower() for v in r.values), axis=1)]
@@ -617,36 +726,41 @@ def page_history():
 def page_trader_best_prices():
     st.subheader("Trader | Best Prices")
 
-    sid, df = _get_latest_prices_df()
+    tab_f, tab_s = st.tabs(["Fertiliser", "Seed"])
+    with tab_f:
+        _page_trader_best_prices_impl(book_code="fert")
+    with tab_s:
+        _page_trader_best_prices_impl(book_code="seed")
+
+def _page_trader_best_prices_impl(book_code: str):
+    sid, df = _get_latest_prices_df_for(book_code)
     if df is None:
         st.warning("No supplier snapshot available. Admin must publish one.")
         return
 
-    # Apply margins so Best Price reflects SELL (incl margin)
     margins = get_effective_margins()
     df = apply_margins(df, margins)
 
     board = _best_prices_board(df)
 
-    # --- Filters ---
     st.markdown("### Filters")
     f1, f2, f3, f4 = st.columns([2, 2, 2, 2])
 
     with f1:
         cats = ["ALL"] + sorted(board["Product Category"].unique().tolist())
-        cat = st.selectbox("Product Category", cats)
+        cat = st.selectbox("Product Category", cats, key=_ss_key(book_code, "bp_cat"))
 
     with f2:
         prods = ["ALL"] + sorted(board["Product"].unique().tolist())
-        prod = st.selectbox("Product", prods)
+        prod = st.selectbox("Product", prods, key=_ss_key(book_code, "bp_prod"))
 
     with f3:
         locs = ["ALL"] + sorted(board["Location"].unique().tolist())
-        loc = st.selectbox("Location", locs)
+        loc = st.selectbox("Location", locs, key=_ss_key(book_code, "bp_loc"))
 
     with f4:
         wins = ["ALL"] + sorted(board["Delivery Window"].unique().tolist())
-        win = st.selectbox("Delivery Window", wins)
+        win = st.selectbox("Delivery Window", wins, key=_ss_key(book_code, "bp_win"))
 
     view = board.copy()
     if cat != "ALL":
@@ -661,19 +775,22 @@ def page_trader_best_prices():
     st.divider()
     st.caption(f"Supplier snapshot: {sid[:8]} | Rows: {len(view)}")
 
-    # --- Basket expiry (same behaviour as pricing page) ---
-    _ensure_basket()
+    # Basket expiry for this book
+    _ensure_basket_for(book_code)
     settings = get_settings()
     timeout_min = int(settings.get("basket_timeout_minutes", "20"))
-    age_sec = time.time() - st.session_state.basket_created_at
+
+    basket_key = _ss_key(book_code, "basket")
+    basket_created_key = _ss_key(book_code, "basket_created_at")
+
+    age_sec = time.time() - st.session_state[basket_created_key]
     if age_sec > timeout_min * 60:
-        st.session_state.basket = []
-        st.session_state.basket_created_at = time.time()
+        st.session_state[basket_key] = []
+        st.session_state[basket_created_key] = time.time()
         st.info("Basket expired and has been cleared.")
 
-    # --- One-click add to basket ---
     st.markdown("### Add to basket from board")
-    qty = st.number_input("Qty (t) for selected lines", min_value=0.0, value=10.0, step=1.0)
+    qty = st.number_input("Qty (t) for selected lines", min_value=0.0, value=10.0, step=1.0, key=_ss_key(book_code, "bp_qty"))
 
     editable = view.rename(columns={
         "Product Category": "Category",
@@ -690,16 +807,16 @@ def page_trader_best_prices():
             "Add": st.column_config.CheckboxColumn("Add"),
             "Best Price": st.column_config.NumberColumn("Best Price", format="£%.2f"),
         },
-        key="best_prices_board_editor",
+        key=_ss_key(book_code, "best_prices_board_editor"),
     )
 
-    if st.button("Add selected lines to basket", type="primary", use_container_width=True):
+    if st.button("Add selected lines to basket", type="primary", use_container_width=True, key=_ss_key(book_code, "bp_add_selected")):
         selected = edited[edited["Add"] == True].copy()
         if selected.empty:
             st.warning("Tick at least one line.")
         else:
             for _, r in selected.iterrows():
-                st.session_state.basket.append({
+                st.session_state[basket_key].append({
                     "Product": r["Product"],
                     "Location": r["Location"],
                     "Delivery Window": r["Window"],
@@ -711,7 +828,6 @@ def page_trader_best_prices():
 
     st.divider()
 
-    # Show ONE table only (avoid the duplication you complained about)
     st.dataframe(
         view.rename(columns={"Product Category": "Category", "Delivery Window": "Window"})[
             ["Category", "Product", "Location", "Window", "Best Price", "Unit", "Supplier"]
